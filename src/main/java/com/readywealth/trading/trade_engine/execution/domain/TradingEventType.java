@@ -1,0 +1,20 @@
+package com.readywealth.trading.trade_engine.execution.domain;
+
+public enum TradingEventType {
+    ORDER_ACCEPTED,
+    ORDER_UPDATED,
+    ORDER_REJECTED,
+    FILL_ADDED,
+    POSITION_UPDATED,
+    FUNDS_UPDATED,
+    MARGIN_DEGRADED,
+    RECONCILED,
+    EXIT_PLAN_CREATED,
+    EXIT_PLAN_ARMED,
+    TRIGGER_UPDATED,
+    TRIGGER_TRIGGERED,
+    OCO_LEG_CANCELLED,
+    EXIT_PLAN_COMPLETED,
+    EXIT_PLAN_REARM_REQUIRED,
+    ORDER_TIMELINE_UPDATED
+}

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trade Engine Session UI</title>
+  <link rel="stylesheet" href="/ui/app-v2.css?v=2" />
+  <script defer src="/ui/app-v2.js?v=2"></script>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Session Test UI</h1>
+
+    <section class="card">
+      <h2>1) Auth</h2>
+      <div class="row">
+        <a class="btn" href="/kite/login" target="_blank" rel="noreferrer">Login (Kite)</a>
+        <button id="btn-auth" class="btn">Refresh Auth</button>
+      </div>
+      <p id="auth-state" class="muted">Not checked</p>
+      <pre id="auth-json">{}</pre>
+    </section>
+
+    <section class="card">
+      <h2>2) Session</h2>
+      <label>Series Key (example: <code>115626503@TIME_1M</code>)</label>
+      <input id="series-key" value="115626503@TIME_1M" />
+
+      <div class="row">
+        <label><input id="destroy-on-close" type="checkbox" checked /> destroyOnClose</label>
+        <label>Max bars <input id="max-bars" type="number" value="5000" /></label>
+      </div>
+
+      <div class="row">
+        <button id="btn-create" class="btn">Create Session</button>
+        <button id="btn-list" class="btn">List Sessions</button>
+        <button id="btn-snapshot" class="btn">Get Snapshot</button>
+        <button id="btn-close" class="btn danger">Close Session</button>
+      </div>
+
+      <label>My sessions</label>
+      <select id="session-select">
+        <option value="">-- none --</option>
+      </select>
+
+      <label>Active Session ID</label>
+      <input id="session-id" placeholder="auto after create/select" />
+
+      <p id="session-msg" class="muted"></p>
+      <pre id="session-json">{}</pre>
+    </section>
+
+    <section class="card">
+      <h2>3) Stream</h2>
+      <div class="row">
+        <button id="btn-ws-connect" class="btn">Connect WS</button>
+        <button id="btn-ws-disconnect" class="btn">Disconnect WS</button>
+      </div>
+      <p id="ws-state" class="muted">Disconnected</p>
+
+      <div class="ticker">
+        <div class="pair"><span>Token</span><strong id="tick-token">-</strong></div>
+        <div class="pair"><span>Price</span><strong id="tick-price">-</strong></div>
+        <div class="pair"><span>Mode</span><strong id="tick-mode">-</strong></div>
+        <div class="pair"><span>Time</span><strong id="tick-time">-</strong></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>4) Script Attach + Delta</h2>
+      <div class="row row-two">
+        <label>Script ID
+          <input id="script-id" value="sample.indicator.close-plot" />
+        </label>
+        <label>Execution mode
+          <select id="script-execution-mode">
+            <option value="ON_CANDLE_CLOSE">ON_CANDLE_CLOSE</option>
+            <option value="ON_TICK">ON_TICK</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="row row-two">
+        <label>every
+          <input id="script-every" type="number" value="1" min="1" />
+        </label>
+        <label>alertAbove
+          <input id="script-alert-above" placeholder="blank = very high threshold" />
+        </label>
+      </div>
+
+      <div class="row">
+        <button id="btn-script-attach" class="btn">Attach Script</button>
+        <button id="btn-script-list" class="btn">List Scripts</button>
+        <button id="btn-script-detach" class="btn danger">Detach Script</button>
+      </div>
+
+      <label>Script Instance ID</label>
+      <input id="script-instance-id" placeholder="auto after attach/list" />
+
+      <label>Latest Script Payload</label>
+      <pre id="script-json">{}</pre>
+
+      <h3>Script Delta Stream</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Event</th>
+            <th>Seq</th>
+            <th>Series</th>
+            <th>Script Instance</th>
+            <th>Registry</th>
+            <th>Summary</th>
+          </tr>
+        </thead>
+        <tbody id="script-deltas"></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Candle Appends</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Begin</th>
+            <th>End</th>
+            <th>Series</th>
+            <th>Seq</th>
+            <th>O</th>
+            <th>H</th>
+            <th>L</th>
+            <th>C</th>
+            <th>V</th>
+          </tr>
+        </thead>
+        <tbody id="candles"></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Errors</h2>
+      <ul id="errors"></ul>
+    </section>
+  </main>
+</body>
+</html>
