@@ -12,7 +12,7 @@ public class BootstrapV2Properties {
         ALL
     }
 
-    private boolean enabled = true;
+    private boolean enabled = false;
     private String scope = Scope.ALL.name().toLowerCase(Locale.ROOT);
 
     public boolean isEnabled() {

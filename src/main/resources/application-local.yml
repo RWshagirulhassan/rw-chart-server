@@ -2,6 +2,14 @@ spring:
   config:
     activate:
       on-profile: local
+  data:
+    redis:
+      host: redis-12122.crce286.ap-south-1-1.ec2.cloud.redislabs.com
+      port: 12122
+      username: default
+      password: r6SzbNN64Osft3OHXhgyRQybe6Ud3JE6
+      ssl:
+        enabled: false
 
 logging:
   level:

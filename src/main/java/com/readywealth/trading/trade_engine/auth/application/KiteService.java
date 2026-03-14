@@ -28,12 +28,15 @@ public class KiteService {
 	}
 
 	public String getLoginUrl() {
+		requireApiKey();
 		KiteConnect kite = new KiteConnect(kiteProperties.getApiKey());
 		return kite.getLoginURL();
 	}
 
 	public TokenRecord generateAndStoreSession(String requestToken) {
 		try {
+			requireApiKey();
+			requireApiSecret();
 			KiteConnect kite = new KiteConnect(kiteProperties.getApiKey());
 			User user = kite.generateSession(requestToken, kiteProperties.getApiSecret());
 
@@ -137,5 +140,17 @@ public class KiteService {
 			return fallback;
 		}
 		return "";
+	}
+
+	private void requireApiKey() {
+		if (kiteProperties.getApiKey() == null || kiteProperties.getApiKey().isBlank()) {
+			throw new IllegalStateException("kite.api-key is missing; set KITE_API_KEY or add it to trade-engine/.env");
+		}
+	}
+
+	private void requireApiSecret() {
+		if (kiteProperties.getApiSecret() == null || kiteProperties.getApiSecret().isBlank()) {
+			throw new IllegalStateException("kite.api-secret is missing; set KITE_API_SECRET or add it to trade-engine/.env");
+		}
 	}
 }

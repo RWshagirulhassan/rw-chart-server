@@ -2,13 +2,20 @@ server:
   port: ${SERVER_PORT:8086}
 
 spring:
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:./trade-engine/.env[.properties]
   application:
     name: auth-service
   data:
     redis:
-      host: ${REDIS_HOST:redis}
-      port: ${REDIS_PORT:6379}
-      database: ${REDIS_DB:0}
+      host: redis-12122.crce286.ap-south-1-1.ec2.cloud.redislabs.com
+      port: 12122
+      username: default
+      password: r6SzbNN64Osft3OHXhgyRQybe6Ud3JE6
+      ssl:
+        enabled: false
 
 management:
   endpoints:
@@ -19,7 +26,7 @@ management:
 kite:
   api-key: ${KITE_API_KEY:}
   api-secret: ${KITE_API_SECRET:}
-  redirect-url: ${KITE_REDIRECT_URL:http://auth-service:8086/kite/callback}
+  redirect-url: ${KITE_REDIRECT_URL:http://localhost:8086/kite/callback}
   ws-max-retries: ${KITE_WS_MAX_RETRIES:50}
   ws-max-retry-interval-seconds: ${KITE_WS_MAX_RETRY_INTERVAL_SECONDS:60}
 
@@ -54,13 +61,13 @@ bootstrap:
     peak-tps: ${BOOTSTRAP_BUFFER_PEAK_TPS:200}
     max-seed-latency-sec: ${BOOTSTRAP_BUFFER_MAX_SEED_LATENCY_SEC:20}
     safety-factor: ${BOOTSTRAP_BUFFER_SAFETY_FACTOR:3}
-    store: ${BOOTSTRAP_BUFFER_STORE:redis-stream}
+    store: ${BOOTSTRAP_BUFFER_STORE:memory}
     redis:
       key-prefix: ${BOOTSTRAP_BUFFER_REDIS_KEY_PREFIX:bootstrap:tickbuf}
     guard:
       max-pending-ticks-total: ${BOOTSTRAP_BUFFER_GUARD_MAX_PENDING_TICKS_TOTAL:10000000}
   v2:
-    enabled: ${BOOTSTRAP_V2_ENABLED:true}
+    enabled: ${BOOTSTRAP_V2_ENABLED:false}
     scope: ${BOOTSTRAP_V2_SCOPE:all}
   scheduler:
     requests-per-second: ${BOOTSTRAP_SCHEDULER_REQUESTS_PER_SECOND:2}

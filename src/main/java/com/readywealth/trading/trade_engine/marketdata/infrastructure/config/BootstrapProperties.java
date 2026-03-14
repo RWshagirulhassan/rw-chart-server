@@ -7,7 +7,7 @@ public class BootstrapProperties {
     private int peakTps = 200;
     private int maxSeedLatencySec = 20;
     private int safetyFactor = 3;
-    private String store = "redis-stream";
+    private String store = "memory";
     private Redis redis = new Redis();
     private Guard guard = new Guard();
 

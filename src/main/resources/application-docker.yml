@@ -2,6 +2,12 @@ spring:
   config:
     activate:
       on-profile: docker
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+
+kite:
+  redirect-url: ${KITE_REDIRECT_URL:http://auth-service:8086/kite/callback}
 
 logging:
   level:
