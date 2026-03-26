@@ -1,17 +1,14 @@
 server:
-  port: ${SERVER_PORT:8086}
+  port: 8086
 
 spring:
-  config:
-    import:
-      - optional:file:.env[.properties]
-      - optional:file:./trade-engine/.env[.properties]
   application:
     name: auth-service
   data:
     redis:
       host: redis-12122.crce286.ap-south-1-1.ec2.cloud.redislabs.com
       port: 12122
+      database: 0
       username: default
       password: r6SzbNN64Osft3OHXhgyRQybe6Ud3JE6
       ssl:
@@ -24,15 +21,15 @@ management:
         include: health,info
 
 kite:
-  api-key: ${KITE_API_KEY:}
-  api-secret: ${KITE_API_SECRET:}
-  redirect-url: ${KITE_REDIRECT_URL:http://localhost:8086/kite/callback}
-  ws-max-retries: ${KITE_WS_MAX_RETRIES:50}
-  ws-max-retry-interval-seconds: ${KITE_WS_MAX_RETRY_INTERVAL_SECONDS:60}
+  api-key: 7ye4tih0hyb1g3zx
+  api-secret: mnmcdwf85fehrp48y9otfvg6ztw7iy6s
+  redirect-url: http://localhost:8086/kite/callback
+  ws-max-retries: 50
+  ws-max-retry-interval-seconds: 60
 
 app:
   cors:
-    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173}
+    allowed-origins: http://localhost:5173
   token:
     expire:
       zone: Asia/Kolkata
@@ -41,47 +38,47 @@ app:
       second: 59
 
 ticks:
-  default-mode: ${TICKS_DEFAULT_MODE:full}
-  dispatcher-workers: ${TICKS_DISPATCHER_WORKERS:1}
-  token-cache-seconds: ${TICKS_TOKEN_CACHE_SECONDS:5}
-  retry-initial-delay-ms: ${TICKS_RETRY_INITIAL_DELAY_MS:1000}
-  retry-max-delay-ms: ${TICKS_RETRY_MAX_DELAY_MS:30000}
-  log-sample-interval-ms: ${TICKS_LOG_SAMPLE_INTERVAL_MS:2000}
+  default-mode: full
+  dispatcher-workers: 2
+  token-cache-seconds: 5
+  retry-initial-delay-ms: 1000
+  retry-max-delay-ms: 30000
+  log-sample-interval-ms: 2000
 
 session:
   candles:
-    zone-id: ${SESSION_CANDLES_ZONE_ID:Asia/Kolkata}
-    market-open: ${SESSION_CANDLES_MARKET_OPEN:09:15}
-    market-close: ${SESSION_CANDLES_MARKET_CLOSE:15:30}
-    live-alignment-enabled: ${SESSION_CANDLES_LIVE_ALIGNMENT_ENABLED:true}
+    zone-id: Asia/Kolkata
+    market-open: "09:15"
+    market-close: "15:30"
+    live-alignment-enabled: true
   stress:
-    enabled: ${SESSION_STRESS_ENABLED:false}
-    poll-interval-ms: ${SESSION_STRESS_POLL_INTERVAL_MS:5000}
+    enabled: false
+    poll-interval-ms: 5000
 
 bootstrap:
   buffer:
-    peak-tps: ${BOOTSTRAP_BUFFER_PEAK_TPS:200}
-    max-seed-latency-sec: ${BOOTSTRAP_BUFFER_MAX_SEED_LATENCY_SEC:20}
-    safety-factor: ${BOOTSTRAP_BUFFER_SAFETY_FACTOR:3}
-    store: ${BOOTSTRAP_BUFFER_STORE:memory}
+    peak-tps: 200
+    max-seed-latency-sec: 20
+    safety-factor: 3
+    store: memory
     redis:
-      key-prefix: ${BOOTSTRAP_BUFFER_REDIS_KEY_PREFIX:bootstrap:tickbuf}
+      key-prefix: bootstrap:tickbuf
     guard:
-      max-pending-ticks-total: ${BOOTSTRAP_BUFFER_GUARD_MAX_PENDING_TICKS_TOTAL:10000000}
+      max-pending-ticks-total: 10000000
   v2:
-    enabled: ${BOOTSTRAP_V2_ENABLED:false}
-    scope: ${BOOTSTRAP_V2_SCOPE:all}
+    enabled: false
+    scope: all
   scheduler:
-    requests-per-second: ${BOOTSTRAP_SCHEDULER_REQUESTS_PER_SECOND:2}
-    burst-size: ${BOOTSTRAP_SCHEDULER_BURST_SIZE:1}
+    requests-per-second: 2
+    burst-size: 1
     retry:
-      initial-delay-ms: ${BOOTSTRAP_SCHEDULER_RETRY_INITIAL_DELAY_MS:500}
-      max-delay-ms: ${BOOTSTRAP_SCHEDULER_RETRY_MAX_DELAY_MS:30000}
-      jitter-ratio: ${BOOTSTRAP_SCHEDULER_RETRY_JITTER_RATIO:0.2}
+      initial-delay-ms: 500
+      max-delay-ms: 30000
+      jitter-ratio: 0.2
 
 internal:
-  port: ${INTERNAL_PORT:0}
-  api-key: ${INTERNAL_API_KEY:}
+  port: 8087
+  api-key: dev-internal-key-123
 
 springdoc:
   api-docs:
@@ -94,31 +91,42 @@ springdoc:
 
 trading:
   retention:
-    order-ttl-seconds: ${TRADING_ORDER_TTL_SECONDS:604800}
-    fill-ttl-seconds: ${TRADING_FILL_TTL_SECONDS:604800}
-    dedupe-ttl-seconds: ${TRADING_DEDUPE_TTL_SECONDS:172800}
+    order-ttl-seconds: 604800
+    fill-ttl-seconds: 604800
+    dedupe-ttl-seconds: 172800
   margin:
-    mis-percent: ${TRADING_MARGIN_MIS_PERCENT:0.20}
-    nrml-percent: ${TRADING_MARGIN_NRML_PERCENT:0.40}
-    charge-bps: ${TRADING_CHARGE_BPS:2.0}
+    mis-percent: 0.20
+    nrml-percent: 0.40
+    charge-bps: 2.0
   paper:
-    slippage-bps: ${TRADING_PAPER_SLIPPAGE_BPS:2.0}
-    fee-bps: ${TRADING_PAPER_FEE_BPS:1.5}
-    execution-cycle-enabled: ${TRADING_PAPER_EXECUTION_CYCLE_ENABLED:true}
-    execution-cycle-fixed-delay-ms: ${TRADING_PAPER_EXECUTION_CYCLE_FIXED_DELAY_MS:500}
-    pnl-epsilon: ${TRADING_PAPER_PNL_EPSILON:0.01}
-    trigger-evaluation-fixed-delay-ms: ${TRADING_PAPER_TRIGGER_EVALUATION_FIXED_DELAY_MS:100}
-    eod-sweep-enabled: ${TRADING_PAPER_EOD_SWEEP_ENABLED:true}
-    eod-sweep-fixed-delay-ms: ${TRADING_PAPER_EOD_SWEEP_FIXED_DELAY_MS:15000}
-    eod-cutoff-time: ${TRADING_PAPER_EOD_CUTOFF_TIME:15:29:30}
+    slippage-bps: 2.0
+    fee-bps: 1.5
+    execution-cycle-enabled: true
+    execution-cycle-fixed-delay-ms: 500
+    pnl-epsilon: 0.01
+    trigger-evaluation-fixed-delay-ms: 100
+    eod-sweep-enabled: true
+    eod-sweep-fixed-delay-ms: 15000
+    eod-cutoff-time: "15:29:30"
   kite:
-    base-url: ${TRADING_KITE_BASE_URL:https://api.kite.trade}
-    live-orders-enabled: ${TRADING_KITE_LIVE_ORDERS_ENABLED:false}
+    base-url: https://api.kite.trade
+    live-orders-enabled: false
   reconciliation:
-    enabled: ${TRADING_RECONCILIATION_ENABLED:false}
-    fixed-delay-ms: ${TRADING_RECONCILIATION_FIXED_DELAY_MS:5000}
+    enabled: false
+    fixed-delay-ms: 5000
   guardrails:
-    max-open-orders-per-account: ${TRADING_MAX_OPEN_ORDERS_PER_ACCOUNT:300}
-    max-orders-per-minute: ${TRADING_MAX_ORDERS_PER_MINUTE:180}
+    max-open-orders-per-account: 300
+    max-orders-per-minute: 180
   intent:
-    dedupe-ttl-seconds: ${TRADING_INTENT_DEDUPE_TTL_SECONDS:86400}
+    dedupe-ttl-seconds: 86400
+
+instruments-loader:
+  exchanges:
+    - NSE
+  write-mode: direct
+  prune-others: true
+  batch-size: 5000
+
+logging:
+  level:
+    root: INFO

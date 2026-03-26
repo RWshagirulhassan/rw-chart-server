@@ -1,35 +1,72 @@
-# Trade Engine Standalone Run
+# Trade Engine Local Run
 
-The Spring Boot jar is now configured to be **standalone-first**:
+This backend is now local-first.
 
-* default Redis host is `localhost`
-* default Kite callback is `http://localhost:8086/kite/callback`
-* Redis auth/TLS can be supplied via environment variables
+All runtime configuration lives in `src/main/resources/application.yml`. There is no `.env` bootstrap step and no Spring profile switching for normal local development.
 
-## Redis env vars
+## Prerequisites
 
-The backend reads these settings through Spring configuration:
+* Java 21
+* Network access to the Redis instance configured in `src/main/resources/application.yml`
+* Valid Kite credentials in `src/main/resources/application.yml` if you need login or broker-backed flows
 
-```bash
-REDIS_HOST=<host>
-REDIS_PORT=<port>
-REDIS_DB=0
-REDIS_USERNAME=default
-REDIS_PASSWORD=<password>
-REDIS_SSL_ENABLED=true
-```
+## Install and configure
 
-For a local non-TLS Redis instance, only `REDIS_HOST` and `REDIS_PORT` are usually needed.
+1. Clone the repository.
+2. Open `trade-engine/src/main/resources/application.yml`.
+3. Review these sections before first run:
+   * `spring.data.redis`
+   * `kite`
+   * `app.cors.allowed-origins`
+   * `server.port`
+   * `internal.port`
+4. If you are using instrument search or other Redis-backed instrument features, preload Redis with the loader described in [`/Users/shagirulhassan/Desktop/algotrading/rw-charting/instruments-loader/readme.MD`](/Users/shagirulhassan/Desktop/algotrading/rw-charting/instruments-loader/readme.MD).
 
-## Run the jar
+## Run the backend
+
+Build the jar:
 
 ```bash
 cd trade-engine
-mvn -q -DskipTests package
+./mvnw -q -DskipTests package
+```
+
+Start the application from the packaged jar:
+
+```bash
 java -jar target/trade-engine-0.0.1-SNAPSHOT.jar
 ```
 
+You can also run it directly from Maven during development:
+
+```bash
+./mvnw spring-boot:run
+```
+
+## Verify startup
+
+After the app starts:
+
+```bash
+curl http://localhost:8086/
+curl http://localhost:8086/api/session
+curl http://localhost:8086/actuator/health
+```
+
+Expected local ports:
+
+* HTTP API: `8086`
+* Internal API: `8087`
+
+## Common local flow
+
+1. Start or verify the Redis instance configured in `application.yml`.
+2. Run the instruments loader if you need instrument search data.
+3. Start the backend.
+4. Open the frontend and call the backend on `http://localhost:8086`.
+
 ## Notes
 
-* Instrument-backed features still expect Redis to be preloaded. Run the loader in [`/Users/shagirulhassan/Desktop/algotrading/rw-charting/instruments-loader/readme.MD`](/Users/shagirulhassan/Desktop/algotrading/rw-charting/instruments-loader/readme.MD) against the same Redis instance before using instrument search and related flows.
-* If you still want the old container defaults, start the app with `SPRING_PROFILES_ACTIVE=docker`.
+* If startup fails, check `src/main/resources/application.yml` first. It is the only supported local config source.
+* If Redis is unreachable, Redis-backed endpoints will fail even if the Spring app itself starts.
+* If Kite credentials are missing or invalid, auth-related flows will fail even if health endpoints still respond.

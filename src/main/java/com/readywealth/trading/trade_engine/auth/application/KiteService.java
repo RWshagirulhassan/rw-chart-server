@@ -144,13 +144,13 @@ public class KiteService {
 
 	private void requireApiKey() {
 		if (kiteProperties.getApiKey() == null || kiteProperties.getApiKey().isBlank()) {
-			throw new IllegalStateException("kite.api-key is missing; set KITE_API_KEY or add it to trade-engine/.env");
+			throw new IllegalStateException("kite.api-key is missing; update trade-engine/src/main/resources/application.yml");
 		}
 	}
 
 	private void requireApiSecret() {
 		if (kiteProperties.getApiSecret() == null || kiteProperties.getApiSecret().isBlank()) {
-			throw new IllegalStateException("kite.api-secret is missing; set KITE_API_SECRET or add it to trade-engine/.env");
+			throw new IllegalStateException("kite.api-secret is missing; update trade-engine/src/main/resources/application.yml");
 		}
 	}
 }

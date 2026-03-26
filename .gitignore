@@ -34,6 +34,3 @@ build/
 
 ### OS artifacts ###
 **/.DS_Store
-
-### Local env ###
-.env
