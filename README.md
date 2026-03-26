@@ -2,18 +2,18 @@
 
 This backend is now local-first.
 
-All runtime configuration lives in `src/main/resources/application.yml`. There is no `.env` bootstrap step and no Spring profile switching for normal local development.
+All runtime configuration lives in `src/main/resources/application.properties`. There is no `.env` bootstrap step and no Spring profile switching for normal local development.
 
 ## Prerequisites
 
 * Java 21
-* Network access to the Redis instance configured in `src/main/resources/application.yml`
-* Valid Kite credentials in `src/main/resources/application.yml` if you need login or broker-backed flows
+* Network access to the Redis instance configured in `src/main/resources/application.properties`
+* Valid Kite credentials in `src/main/resources/application.properties` if you need login or broker-backed flows
 
 ## Install and configure
 
 1. Clone the repository.
-2. Open `trade-engine/src/main/resources/application.yml`.
+2. Open `trade-engine/src/main/resources/application.properties`.
 3. Review these sections before first run:
    * `spring.data.redis`
    * `kite`
@@ -60,13 +60,13 @@ Expected local ports:
 
 ## Common local flow
 
-1. Start or verify the Redis instance configured in `application.yml`.
+1. Start or verify the Redis instance configured in `application.properties`.
 2. Run the instruments loader if you need instrument search data.
 3. Start the backend.
 4. Open the frontend and call the backend on `http://localhost:8086`.
 
 ## Notes
 
-* If startup fails, check `src/main/resources/application.yml` first. It is the only supported local config source.
+* If startup fails, check `src/main/resources/application.properties` first. It is the only supported local config source.
 * If Redis is unreachable, Redis-backed endpoints will fail even if the Spring app itself starts.
 * If Kite credentials are missing or invalid, auth-related flows will fail even if health endpoints still respond.

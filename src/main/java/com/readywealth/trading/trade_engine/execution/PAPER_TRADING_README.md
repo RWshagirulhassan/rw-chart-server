@@ -221,7 +221,7 @@ Response:
 - Unrealized PnL updates in execution cycle using latest LTP and emits `POSITION_UPDATED`/`FUNDS_UPDATED`.
 
 ## Config Flags
-In `application.yml` under `trading.paper`:
+In `application.properties` under `trading.paper`:
 - `execution-cycle-enabled`
 - `execution-cycle-fixed-delay-ms`
 - `trigger-evaluation-fixed-delay-ms`
