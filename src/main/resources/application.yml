@@ -31,6 +31,8 @@ kite:
   ws-max-retry-interval-seconds: ${KITE_WS_MAX_RETRY_INTERVAL_SECONDS:60}
 
 app:
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173}
   token:
     expire:
       zone: Asia/Kolkata
