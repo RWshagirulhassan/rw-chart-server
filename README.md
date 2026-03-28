@@ -65,6 +65,18 @@ Expected local ports:
 3. Start the backend.
 4. Open the frontend and call the backend on `http://localhost:8086`.
 
+## Hosted deployment
+
+For the current hosted setup:
+
+* Backend base URL: `https://15.206.119.81`
+* Kite callback URL: `https://15.206.119.81/kite/callback`
+* Hosted frontend origin: `https://rw-chart-client.vercel.app`
+
+Keep `app.cors.allowed-origins` aligned with the exact frontend origins you want to allow. For now the backend supports both hosted Vercel traffic and local Vite traffic.
+
+After changing backend properties, redeploy the backend. After changing `client/public/runtime-config.json`, redeploy the Vercel frontend so it starts calling the AWS backend instead of localhost.
+
 ## Notes
 
 * If startup fails, check `src/main/resources/application.properties` first. It is the only supported local config source.
