@@ -1,7 +1,7 @@
 # Script Runtime README
 
 ## Script types
-- `INDICATOR`: writes plots/drawings/alerts.
+- `INDICATOR`: writes plots/drawings.
 - `STRATEGY`: same as indicator + emits intents.
 
 ## Main interfaces

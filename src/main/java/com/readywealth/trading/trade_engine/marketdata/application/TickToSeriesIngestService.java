@@ -2,7 +2,6 @@ package com.readywealth.trading.trade_engine.marketdata.application;
 
 import com.readywealth.trading.trade_engine.session.api.http.dto.CandleAppendedEvent;
 import com.readywealth.trading.trade_engine.session.api.http.dto.SeriesBarView;
-import com.readywealth.trading.trade_engine.execution.application.service.StrategyIntentDispatchService;
 import com.readywealth.trading.trade_engine.marketdata.api.ws.dto.ScriptDeltaWsEvent;
 import com.readywealth.trading.trade_engine.engine.application.runtime.SeriesKeyCodec;
 import com.readywealth.trading.trade_engine.engine.application.runtime.SeriesAdvanceEvent;
@@ -11,7 +10,6 @@ import com.readywealth.trading.trade_engine.engine.application.runtime.SeriesRun
 import com.readywealth.trading.trade_engine.engine.domain.series.SeriesKey;
 import com.readywealth.trading.trade_engine.engine.application.runtime.model.DeltaResponse;
 import com.readywealth.trading.trade_engine.engine.application.runtime.model.SessionEvent;
-import com.readywealth.trading.trade_engine.engine.application.runtime.model.TradeIntent;
 import com.readywealth.trading.trade_engine.session.application.SessionSeriesCoordinator;
 import com.readywealth.trading.trade_engine.session.domain.UiSessionId;
 import com.readywealth.trading.trade_engine.session.infrastructure.memory.InMemoryConcurrentBarSeriesRegistry;
@@ -63,8 +61,6 @@ public class TickToSeriesIngestService {
     private final BootstrapProperties bootstrapProperties;
     private final SessionAlignedSeriesIngestor sessionAlignedSeriesIngestor;
     private final boolean liveAlignmentEnabled;
-    @Autowired(required = false)
-    private ObjectProvider<StrategyIntentDispatchService> strategyIntentDispatchServiceProvider;
 
     @Autowired
     public TickToSeriesIngestService(
@@ -344,25 +340,15 @@ public class TickToSeriesIngestService {
                 if (sid != null) {
                     scriptInstanceId = sid.toString();
                 }
-            } else if (payload instanceof TradeIntent intent) {
-                scriptInstanceId = intent.scriptInstanceId();
-                if ("INTENT_ADD".equals(event.type())) {
-                    StrategyIntentDispatchService dispatchService = strategyIntentDispatchServiceProvider == null
-                            ? null
-                            : strategyIntentDispatchServiceProvider.getIfAvailable();
-                    if (dispatchService != null) {
-                        dispatchService.dispatchAsync(seriesKey, intent);
-                    }
-                }
             }
             if (event.type().startsWith("DRAWING")) {
                 registryType = "drawing";
             } else if (event.type().startsWith("PLOT")) {
                 registryType = "plot";
-            } else if (event.type().startsWith("ALERT")) {
-                registryType = "alert";
-            } else if (event.type().startsWith("INTENT")) {
-                registryType = "intent";
+            }
+
+            if (event.type().startsWith("ALERT")) {
+                continue;
             }
 
             if (scriptInstanceId != null) {
@@ -380,11 +366,7 @@ public class TickToSeriesIngestService {
                             scriptInstanceId,
                             payload,
                             registryType);
-                    if ("INTENT_ADD".equals(event.type())) {
-                        webSocketBroadcaster.broadcastIntentToSession(target, wsEvent);
-                    } else {
-                        webSocketBroadcaster.broadcastScriptDeltaToSession(target, wsEvent);
-                    }
+                    webSocketBroadcaster.broadcastScriptDeltaToSession(target, wsEvent);
                     continue;
                 }
             }
@@ -397,11 +379,7 @@ public class TickToSeriesIngestService {
                         scriptInstanceId,
                         payload,
                         registryType);
-                if ("INTENT_ADD".equals(event.type())) {
-                    webSocketBroadcaster.broadcastIntentToSession(sessionId, wsEvent);
-                } else {
-                    webSocketBroadcaster.broadcastScriptDeltaToSession(sessionId, wsEvent);
-                }
+                webSocketBroadcaster.broadcastScriptDeltaToSession(sessionId, wsEvent);
             }
         }
     }

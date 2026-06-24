@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class HistoricalRequestRateLimiter {
+    private static final int MAX_HISTORICAL_RPS = 3;
 
     private final BootstrapSchedulerProperties properties;
     private double tokens;
@@ -12,7 +13,7 @@ public class HistoricalRequestRateLimiter {
 
     public HistoricalRequestRateLimiter(BootstrapSchedulerProperties properties) {
         this.properties = properties;
-        this.tokens = Math.max(1, properties.getBurstSize());
+        this.tokens = effectiveBurstSize();
         this.lastRefillNs = System.nanoTime();
     }
 
@@ -25,7 +26,7 @@ public class HistoricalRequestRateLimiter {
                     tokens -= 1d;
                     return;
                 }
-                int rps = Math.max(1, properties.getRequestsPerSecond());
+                int rps = effectiveRequestsPerSecond();
                 sleepMs = Math.max(1L, Math.round(1000d / rps));
             }
             try {
@@ -38,8 +39,8 @@ public class HistoricalRequestRateLimiter {
     }
 
     private void refill() {
-        int rps = Math.max(1, properties.getRequestsPerSecond());
-        int burst = Math.max(1, properties.getBurstSize());
+        int rps = effectiveRequestsPerSecond();
+        int burst = effectiveBurstSize();
         long nowNs = System.nanoTime();
         double elapsedSeconds = Math.max(0d, (nowNs - lastRefillNs) / 1_000_000_000d);
         if (elapsedSeconds <= 0d) {
@@ -47,5 +48,13 @@ public class HistoricalRequestRateLimiter {
         }
         tokens = Math.min(burst, tokens + elapsedSeconds * rps);
         lastRefillNs = nowNs;
+    }
+
+    private int effectiveRequestsPerSecond() {
+        return Math.min(MAX_HISTORICAL_RPS, Math.max(1, properties.getRequestsPerSecond()));
+    }
+
+    private int effectiveBurstSize() {
+        return Math.min(MAX_HISTORICAL_RPS, Math.max(1, properties.getBurstSize()));
     }
 }

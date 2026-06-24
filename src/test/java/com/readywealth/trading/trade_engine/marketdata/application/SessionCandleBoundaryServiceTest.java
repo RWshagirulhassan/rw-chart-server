@@ -59,4 +59,21 @@ class SessionCandleBoundaryServiceTest {
         assertTrue(service.isTradableInstant(inSession, IntervalKind.TIME_10M, Duration.ofMinutes(10)));
         assertFalse(service.isTradableInstant(outOfSession, IntervalKind.TIME_10M, Duration.ofMinutes(10)));
     }
+
+    @Test
+    void alignsWeeklyAndMonthlyCalendarBuckets() {
+        SessionCandleBoundaryService service = new SessionCandleBoundaryService("Asia/Kolkata", "09:15", "15:30");
+
+        ZonedDateTime weeklyInput = ZonedDateTime.of(2026, 3, 4, 14, 0, 0, 0, IST); // Wednesday
+        ZonedDateTime weeklyFloor = service.floorToBucketStart(weeklyInput, Duration.ofDays(7), IntervalKind.TIME_1W);
+        assertEquals(ZonedDateTime.of(2026, 3, 2, 0, 0, 0, 0, IST), weeklyFloor);
+        assertEquals(ZonedDateTime.of(2026, 3, 9, 0, 0, 0, 0, IST).toInstant(),
+                service.nextBucketBoundary(weeklyInput.toInstant(), Duration.ofDays(7), IntervalKind.TIME_1W));
+
+        ZonedDateTime monthlyInput = ZonedDateTime.of(2026, 3, 18, 14, 0, 0, 0, IST);
+        ZonedDateTime monthlyFloor = service.floorToBucketStart(monthlyInput, Duration.ofDays(31), IntervalKind.TIME_1MO);
+        assertEquals(ZonedDateTime.of(2026, 3, 1, 0, 0, 0, 0, IST), monthlyFloor);
+        assertEquals(ZonedDateTime.of(2026, 4, 1, 0, 0, 0, 0, IST).toInstant(),
+                service.nextBucketBoundary(monthlyInput.toInstant(), Duration.ofDays(31), IntervalKind.TIME_1MO));
+    }
 }

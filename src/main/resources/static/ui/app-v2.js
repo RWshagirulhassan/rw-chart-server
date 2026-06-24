@@ -480,7 +480,6 @@
         if (msg.type === "candle_appended") renderCandle(msg.data);
         if (msg.type === "candle_live_upsert") renderCandle(msg.data);
         if (msg.type === "script_registry_delta") renderScriptDelta(msg.data);
-        if (msg.type === "intent_emitted") renderScriptDelta(msg.data);
         if (msg.type === "script_snapshot_ready") {
           scriptLog("ws_script_snapshot_ready", msg.data);
           if (msg.data?.sessionId && state.currentSessionId && msg.data.sessionId !== state.currentSessionId) {

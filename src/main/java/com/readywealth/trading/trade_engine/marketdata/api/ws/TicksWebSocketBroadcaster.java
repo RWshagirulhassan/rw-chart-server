@@ -69,6 +69,9 @@ public class TicksWebSocketBroadcaster {
 					sessionId.value(),
 					payload.seriesKey(),
 					payload.status(),
+					payload.seriesHealthStatus(),
+					payload.seriesHealthReason(),
+					payload.seriesReuseDecision(),
 					payload.cutoffAt(),
 					payload.seededBars(),
 					payload.replayedTicks(),
@@ -82,10 +85,6 @@ public class TicksWebSocketBroadcaster {
 
 	public void broadcastScriptDeltaToSession(UiSessionId sessionId, ScriptDeltaWsEvent payload) {
 		broadcastToSession("script_registry_delta", sessionId, payload);
-	}
-
-	public void broadcastIntentToSession(UiSessionId sessionId, ScriptDeltaWsEvent payload) {
-		broadcastToSession("intent_emitted", sessionId, payload);
 	}
 
 	public void broadcastScriptAttachCatchupToSession(UiSessionId sessionId, ScriptAttachCatchupWsEvent payload) {

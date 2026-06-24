@@ -1,7 +1,8 @@
 package com.readywealth.trading.trade_engine.session.infrastructure.memory;
 
-import com.readywealth.trading.trade_engine.engine.application.IntervalKindMapper;
 import com.readywealth.trading.trade_engine.engine.domain.series.BarSeriesContext;
+import com.readywealth.trading.trade_engine.engine.domain.series.IntervalDescriptor;
+import com.readywealth.trading.trade_engine.engine.domain.series.IntervalDescriptors;
 import com.readywealth.trading.trade_engine.engine.domain.series.SeriesConfig;
 import com.readywealth.trading.trade_engine.engine.domain.series.SeriesKey;
 import org.springframework.stereotype.Component;
@@ -35,17 +36,7 @@ public class InMemoryConcurrentBarSeriesRegistry {
                 existing.seriesRefCount().incrementAndGet();
                 return existing;
             }
-            NumFactory numFactory = DecimalNumFactory.getInstance();
-            ConcurrentBarSeries series = new ConcurrentBarSeriesBuilder()
-                    .withName(key.toString())
-                    .withNumFactory(numFactory)
-                    .withMaxBarCount(Math.max(1, maxBarCount))
-                    .build();
-            Duration timePeriod = IntervalKindMapper.toDuration(key.timeframe());
-            series.tradeBarBuilder().timePeriod(timePeriod);
-            BarSeriesContext context = new BarSeriesContext(key, series, numFactory, new SeriesConfig(maxBarCount));
-            return new SeriesEntry(key, series, context, new AtomicInteger(1), new AtomicLong(0), maxBarCount, timePeriod,
-                    new AtomicLong(Long.MIN_VALUE), new BootstrapState(), new ConcurrentLinkedDeque<>());
+            return newEntry(key, maxBarCount, 1, 0L);
         });
 
         seriesByInstrument
@@ -54,6 +45,15 @@ public class InMemoryConcurrentBarSeriesRegistry {
 
         boolean created = entry.seriesRefCount().get() == 1;
         return new AcquireResult(entry, created);
+    }
+
+    public SeriesEntry replaceWithFreshEntry(SeriesKey key, int maxBarCount, int preservedRefs) {
+        SeriesEntry fresh = newEntry(key, maxBarCount, Math.max(0, preservedRefs), 0L);
+        entries.put(key, fresh);
+        seriesByInstrument
+                .computeIfAbsent(key.instrumentToken(), ignored -> ConcurrentHashMap.newKeySet())
+                .add(key);
+        return fresh;
     }
 
     public ReleaseResult release(SeriesKey key) {
@@ -158,8 +158,10 @@ public class InMemoryConcurrentBarSeriesRegistry {
             AtomicLong lastSeq,
             int maxBarCount,
             Duration timePeriod,
+            IntervalDescriptor intervalDescriptor,
             AtomicLong lastIngestTimestampMs,
             BootstrapState bootstrapState,
+            SeriesHealthState seriesHealthState,
             ConcurrentLinkedDeque<BufferedTick> bootstrapBuffer) {
     }
 
@@ -185,6 +187,21 @@ public class InMemoryConcurrentBarSeriesRegistry {
         DEGRADED
     }
 
+    public enum SeriesHealthStatus {
+        FRESH_BOOTSTRAPPING,
+        HEALTHY_REUSED,
+        REBUILDING,
+        STALE_SHARED,
+        DEGRADED
+    }
+
+    public enum SeriesReuseDecision {
+        FRESH_CREATE,
+        REUSED_HEALTHY,
+        REBUILT_STALE_RETAINED,
+        STALE_SHARED
+    }
+
     public record BootstrapSnapshot(
             BootstrapStatus status,
             BootstrapLifecycle lifecycle,
@@ -197,6 +214,13 @@ public class InMemoryConcurrentBarSeriesRegistry {
             long droppedTicks,
             long runId,
             boolean v2Enabled) {
+    }
+
+    public record SeriesHealthSnapshot(
+            SeriesHealthStatus status,
+            String reason,
+            SeriesReuseDecision reuseDecision,
+            Instant updatedAt) {
     }
 
     public static final class BootstrapState {
@@ -329,5 +353,60 @@ public class InMemoryConcurrentBarSeriesRegistry {
                     runId,
                     v2Enabled);
         }
+
+        public synchronized void forceDegraded(String reason) {
+            status = BootstrapStatus.DEGRADED;
+            lifecycle = BootstrapLifecycle.DEGRADED;
+            error = reason == null ? "bootstrap_failed" : reason;
+            completedAt = Instant.now();
+        }
+    }
+
+    public static final class SeriesHealthState {
+        private SeriesHealthStatus status = SeriesHealthStatus.FRESH_BOOTSTRAPPING;
+        private String reason = "fresh_series_created";
+        private SeriesReuseDecision reuseDecision = SeriesReuseDecision.FRESH_CREATE;
+        private Instant updatedAt = Instant.now();
+
+        public synchronized void mark(
+                SeriesHealthStatus status,
+                String reason,
+                SeriesReuseDecision reuseDecision) {
+            this.status = status == null ? SeriesHealthStatus.DEGRADED : status;
+            this.reason = reason == null ? "series_health_unknown" : reason;
+            this.reuseDecision = reuseDecision == null ? SeriesReuseDecision.FRESH_CREATE : reuseDecision;
+            this.updatedAt = Instant.now();
+        }
+
+        public synchronized SeriesHealthSnapshot snapshot() {
+            return new SeriesHealthSnapshot(status, reason, reuseDecision, updatedAt);
+        }
+    }
+
+    private SeriesEntry newEntry(SeriesKey key, int maxBarCount, int refs, long lastSeq) {
+        NumFactory numFactory = DecimalNumFactory.getInstance();
+        int boundedMaxBarCount = Math.max(1, maxBarCount);
+        ConcurrentBarSeries series = new ConcurrentBarSeriesBuilder()
+                .withName(key.toString())
+                .withNumFactory(numFactory)
+                .withMaxBarCount(boundedMaxBarCount)
+                .build();
+        IntervalDescriptor intervalDescriptor = IntervalDescriptors.of(key.timeframe());
+        Duration timePeriod = intervalDescriptor.defaultBarBuilderDuration();
+        series.tradeBarBuilder().timePeriod(timePeriod);
+        BarSeriesContext context = new BarSeriesContext(key, series, numFactory, new SeriesConfig(boundedMaxBarCount));
+        return new SeriesEntry(
+                key,
+                series,
+                context,
+                new AtomicInteger(refs),
+                new AtomicLong(lastSeq),
+                boundedMaxBarCount,
+                timePeriod,
+                intervalDescriptor,
+                new AtomicLong(Long.MIN_VALUE),
+                new BootstrapState(),
+                new SeriesHealthState(),
+                new ConcurrentLinkedDeque<>());
     }
 }

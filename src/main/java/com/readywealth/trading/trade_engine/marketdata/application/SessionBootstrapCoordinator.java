@@ -1,8 +1,9 @@
 package com.readywealth.trading.trade_engine.marketdata.application;
 
-import com.readywealth.trading.trade_engine.engine.application.IntervalKindMapper;
 import com.readywealth.trading.trade_engine.engine.domain.series.Candle;
+import com.readywealth.trading.trade_engine.engine.domain.series.IntervalDescriptor;
 import com.readywealth.trading.trade_engine.engine.domain.series.IntervalKind;
+import com.readywealth.trading.trade_engine.engine.domain.series.IntervalDescriptors;
 import com.readywealth.trading.trade_engine.engine.domain.series.SeriesKey;
 import com.readywealth.trading.trade_engine.engine.application.runtime.SeriesAdvanceEvent;
 import com.readywealth.trading.trade_engine.engine.application.runtime.SeriesKeyCodec;
@@ -159,7 +160,7 @@ public class SessionBootstrapCoordinator {
             v2Enabled = false;
         }
 
-        Instant cutoff = nextBoundary(Instant.now(), entry.timePeriod(), key.timeframe());
+        Instant cutoff = nextBoundary(Instant.now(), entry.intervalDescriptor());
         long runId = entry.bootstrapState().reserve(cutoff, v2Enabled);
         if (runId < 0) {
             return;
@@ -188,6 +189,18 @@ public class SessionBootstrapCoordinator {
             return;
         }
 
+        InMemoryConcurrentBarSeriesRegistry.SeriesHealthSnapshot health = entry.seriesHealthState().snapshot();
+        if (health.reuseDecision() == InMemoryConcurrentBarSeriesRegistry.SeriesReuseDecision.REUSED_HEALTHY) {
+            emitBootstrapEvent("snapshot_ready", key, entry);
+            return;
+        }
+        if (health.status() == InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.STALE_SHARED
+                || health.status() == InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.DEGRADED) {
+            emitBootstrapEvent("bootstrap_degraded", key, entry);
+            emitBootstrapEvent("snapshot_ready", key, entry);
+            return;
+        }
+
         InMemoryConcurrentBarSeriesRegistry.BootstrapSnapshot snapshot = entry.bootstrapState().snapshot();
         long runId = snapshot.runId();
         Instant cutoff = snapshot.cutoffAt();
@@ -196,7 +209,7 @@ public class SessionBootstrapCoordinator {
         if (snapshot.status() != InMemoryConcurrentBarSeriesRegistry.BootstrapStatus.RUNNING
                 || runId <= 0
                 || cutoff == null) {
-            cutoff = nextBoundary(Instant.now(), entry.timePeriod(), key.timeframe());
+            cutoff = nextBoundary(Instant.now(), entry.intervalDescriptor());
             runId = entry.bootstrapState().tryStart(cutoff);
             if (runId < 0) {
                 return;
@@ -211,10 +224,8 @@ public class SessionBootstrapCoordinator {
     }
 
     public void bootstrapEngineSeriesAsync(SeriesKey key, Consumer<List<Candle>> ingestConsumer) {
-        Duration timeframe;
-        try {
-            timeframe = IntervalKindMapper.toDuration(key.timeframe());
-        } catch (Exception ex) {
+        IntervalDescriptor descriptor = IntervalDescriptors.of(key.timeframe());
+        if (descriptor.isTick()) {
             EngineBootstrapState state = engineStates.computeIfAbsent(key, ignored -> new EngineBootstrapState());
             long runId = state.tryStart(null);
             state.markDegraded(runId, "unsupported_timeframe_for_bootstrap");
@@ -222,7 +233,7 @@ public class SessionBootstrapCoordinator {
             return;
         }
         EngineBootstrapState state = engineStates.computeIfAbsent(key, ignored -> new EngineBootstrapState());
-        Instant cutoff = nextBoundary(Instant.now(), timeframe, key.timeframe());
+        Instant cutoff = nextBoundary(Instant.now(), descriptor);
         long runId = state.tryStart(cutoff);
         if (runId < 0) {
             return;
@@ -232,7 +243,7 @@ public class SessionBootstrapCoordinator {
         CompletableFuture.runAsync(() -> {
             try {
                 List<Candle> recent = historicalCandleClient.fetchRecentCandles(key.instrumentToken(), key.timeframe());
-                List<Candle> seed = normalizeAndFilter(recent, key, timeframe, cutoff.toEpochMilli());
+                List<Candle> seed = normalizeAndFilter(recent, key, cutoff.toEpochMilli());
                 ingestConsumer.accept(seed);
                 state.markSeeded(seed.size());
                 seededBarsCounter.increment(seed.size());
@@ -318,7 +329,18 @@ public class SessionBootstrapCoordinator {
 
         try {
             List<Candle> recent = fetchRecentWithRetry(job.key(), job.runId());
-            List<Candle> seed = normalizeAndFilter(recent, job.key(), entry.timePeriod(), cutoff.toEpochMilli());
+            List<Candle> seed = normalizeAndFilter(recent, job.key(), cutoff.toEpochMilli());
+            if (hasHistoricalSeedOrderingViolation(entry, seed)) {
+                entry.bootstrapState().markDegraded(job.runId(), "historical_seed_older_than_existing_series");
+                entry.seriesHealthState().mark(
+                        InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.DEGRADED,
+                        "historical_seed_older_than_existing_series",
+                        entry.seriesHealthState().snapshot().reuseDecision());
+                degradedCounter.increment();
+                emitBootstrapEvent("bootstrap_degraded", job.key(), entry);
+                emitBootstrapEvent("snapshot_ready", job.key(), entry);
+                return;
+            }
             List<Bar> bars = toBars(entry, seed);
 
             int beforeBegin = entry.series().getBeginIndex();
@@ -363,11 +385,19 @@ public class SessionBootstrapCoordinator {
 
             entry.bootstrapState().markCompleted(job.runId());
             if (entry.bootstrapState().snapshot().status() == InMemoryConcurrentBarSeriesRegistry.BootstrapStatus.DEGRADED) {
+                entry.seriesHealthState().mark(
+                        InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.DEGRADED,
+                        entry.bootstrapState().snapshot().error(),
+                        entry.seriesHealthState().snapshot().reuseDecision());
                 degradedCounter.increment();
                 log.warn("bootstrap_degraded seriesKey={} runId={} error={}",
                         job.key(), job.runId(), entry.bootstrapState().snapshot().error());
                 emitBootstrapEvent("bootstrap_degraded", job.key(), entry);
             } else {
+                entry.seriesHealthState().mark(
+                        InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.HEALTHY_REUSED,
+                        "bootstrap_completed",
+                        entry.seriesHealthState().snapshot().reuseDecision());
                 completedCounter.increment();
                 log.info("bootstrap_completed seriesKey={} runId={} seededBars={} replayedTicks={} v2Enabled={}",
                         job.key(), job.runId(), seed.size(), replayed, job.v2Enabled());
@@ -376,6 +406,10 @@ public class SessionBootstrapCoordinator {
             emitBootstrapEvent("snapshot_ready", job.key(), entry);
         } catch (HistoricalFetchException historicalFetchException) {
             entry.bootstrapState().markDegraded(job.runId(), historicalFetchException.getMessage());
+            entry.seriesHealthState().mark(
+                    InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.DEGRADED,
+                    historicalFetchException.getMessage(),
+                    entry.seriesHealthState().snapshot().reuseDecision());
             degradedCounter.increment();
             log.warn("bootstrap_degraded seriesKey={} runId={} transient={} reason={}",
                     job.key(), job.runId(), historicalFetchException.isTransientFailure(),
@@ -384,6 +418,10 @@ public class SessionBootstrapCoordinator {
             emitBootstrapEvent("snapshot_ready", job.key(), entry);
         } catch (Exception exception) {
             entry.bootstrapState().markDegraded(job.runId(), exception.getMessage());
+            entry.seriesHealthState().mark(
+                    InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.DEGRADED,
+                    exception.getMessage(),
+                    entry.seriesHealthState().snapshot().reuseDecision());
             degradedCounter.increment();
             log.warn("bootstrap_degraded seriesKey={} runId={} reason={}",
                     job.key(), job.runId(), exception.toString());
@@ -536,10 +574,14 @@ public class SessionBootstrapCoordinator {
             return;
         }
         InMemoryConcurrentBarSeriesRegistry.BootstrapSnapshot snapshot = entry.bootstrapState().snapshot();
+        InMemoryConcurrentBarSeriesRegistry.SeriesHealthSnapshot health = entry.seriesHealthState().snapshot();
         BootstrapLifecycleEvent event = new BootstrapLifecycleEvent(
                 null,
                 SeriesKeyCodec.encode(key),
                 snapshot.status().name(),
+                health.status().name(),
+                health.reason(),
+                health.reuseDecision().name(),
                 snapshot.cutoffAt(),
                 snapshot.seededBars(),
                 snapshot.replayedTicks(),
@@ -550,15 +592,34 @@ public class SessionBootstrapCoordinator {
         webSocketBroadcaster.broadcastBootstrapEventToSessions(type, sessionIds, event);
     }
 
-    private static List<Candle> normalizeAndFilter(List<Candle> source, SeriesKey key, Duration timePeriod, long cutoffEpochMs) {
+    private boolean hasHistoricalSeedOrderingViolation(
+            InMemoryConcurrentBarSeriesRegistry.SeriesEntry entry,
+            List<Candle> seed) {
+        if (seed == null || seed.isEmpty()) {
+            return false;
+        }
+        long firstSeedStartMs = seed.stream()
+                .mapToLong(Candle::startTimeEpochMs)
+                .min()
+                .orElse(Long.MAX_VALUE);
+        long existingSeriesEndMs = entry.series().withReadLock(() -> {
+            int endIndex = entry.series().getEndIndex();
+            if (endIndex < 0) {
+                return Long.MIN_VALUE;
+            }
+            return entry.series().getBar(endIndex).getEndTime().toEpochMilli();
+        });
+        return existingSeriesEndMs > firstSeedStartMs;
+    }
+
+    private static List<Candle> normalizeAndFilter(List<Candle> source, SeriesKey key, long cutoffEpochMs) {
         if (source == null || source.isEmpty()) {
             return List.of();
         }
         List<Candle> out = new ArrayList<>();
-        long barMs = Math.max(1, timePeriod.toMillis());
         for (Candle candle : source) {
             long start = candle.startTimeEpochMs();
-            long end = start + barMs;
+            long end = candle.endTimeEpochMs();
             if (end <= cutoffEpochMs) {
                 out.add(new Candle(
                         key.instrumentToken(),
@@ -598,11 +659,14 @@ public class SessionBootstrapCoordinator {
         return out;
     }
 
-    private Instant nextBoundary(Instant now, Duration timeframe, IntervalKind intervalKind) {
+    private Instant nextBoundary(Instant now, IntervalDescriptor descriptor) {
         if (liveAlignmentEnabled) {
-            return sessionCandleBoundaryService.nextBucketBoundary(now, timeframe, intervalKind);
+            return sessionCandleBoundaryService.nextBucketBoundary(now, descriptor);
         }
-        return legacyNextBoundary(now, timeframe);
+        if (descriptor.isCalendar()) {
+            return sessionCandleBoundaryService.nextBucketBoundary(now, descriptor);
+        }
+        return legacyNextBoundary(now, descriptor.fixedDurationOrThrow());
     }
 
     private static Instant legacyNextBoundary(Instant now, Duration timeframe) {

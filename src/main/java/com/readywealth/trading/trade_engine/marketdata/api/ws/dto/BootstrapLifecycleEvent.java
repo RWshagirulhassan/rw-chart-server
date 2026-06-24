@@ -6,6 +6,9 @@ public record BootstrapLifecycleEvent(
         String sessionId,
         String seriesKey,
         String status,
+        String seriesHealthStatus,
+        String seriesHealthReason,
+        String seriesReuseDecision,
         Instant cutoffAt,
         long seededBars,
         long replayedTicks,
@@ -14,4 +17,3 @@ public record BootstrapLifecycleEvent(
         long snapshotCursor,
         Instant asOf) {
 }
-

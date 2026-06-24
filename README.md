@@ -1,6 +1,6 @@
 # Trade Engine Local Run
 
-This backend is now local-first.
+This backend is now local-first and charting-focused.
 
 All runtime configuration lives in `src/main/resources/application.properties`. There is no `.env` bootstrap step and no Spring profile switching for normal local development.
 
@@ -8,7 +8,7 @@ All runtime configuration lives in `src/main/resources/application.properties`. 
 
 * Java 21
 * Network access to the Redis instance configured in `src/main/resources/application.properties`
-* Valid Kite credentials in `src/main/resources/application.properties` if you need login or broker-backed flows
+* Valid Kite credentials in `src/main/resources/application.properties` if you need login or live market data
 
 ## Install and configure
 
@@ -82,3 +82,5 @@ After changing backend properties, redeploy the backend. After changing `client/
 * If startup fails, check `src/main/resources/application.properties` first. It is the only supported local config source.
 * If Redis is unreachable, Redis-backed endpoints will fail even if the Spring app itself starts.
 * If Kite credentials are missing or invalid, auth-related flows will fail even if health endpoints still respond.
+* The chart backend now accepts weekly/monthly interval kinds: `TIME_1W` and `TIME_1MO`.
+* Frontend/embed shorthand maps `1W -> TIME_1W` and `1M -> TIME_1MO`.

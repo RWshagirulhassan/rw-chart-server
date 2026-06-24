@@ -93,6 +93,34 @@ class SessionAlignedSeriesIngestorTest {
         assertEquals(ts(2026, 3, 3, 0, 0), series.getBar(1).getBeginTime().toEpochMilli());
     }
 
+    @Test
+    void alignsWeeklyAndMonthlyBarsToCalendarBoundaries() {
+        InMemoryConcurrentBarSeriesRegistry registry = new InMemoryConcurrentBarSeriesRegistry();
+        SessionAlignedSeriesIngestor ingestor = new SessionAlignedSeriesIngestor("Asia/Kolkata", "09:15", "15:30");
+
+        InMemoryConcurrentBarSeriesRegistry.SeriesEntry weeklyEntry = registry
+                .acquire(new SeriesKey(256265L, IntervalKind.TIME_1W), 2000)
+                .entry();
+        assertEquals(SessionAlignedSeriesIngestor.IngestResult.APPENDED, ingestor.ingest(weeklyEntry, ts(2026, 3, 4, 10, 0), 100.0, 1.0));
+        assertEquals(SessionAlignedSeriesIngestor.IngestResult.REPLACED, ingestor.ingest(weeklyEntry, ts(2026, 3, 6, 14, 0), 120.0, 2.0));
+        var weeklySeries = weeklyEntry.series();
+        assertEquals(ts(2026, 3, 2, 0, 0), weeklySeries.getBar(0).getBeginTime().toEpochMilli());
+        assertEquals(ts(2026, 3, 9, 0, 0), weeklySeries.getBar(0).getEndTime().toEpochMilli());
+        assertEquals("100.0", weeklySeries.getBar(0).getOpenPrice().toString());
+        assertEquals("120.0", weeklySeries.getBar(0).getClosePrice().toString());
+
+        InMemoryConcurrentBarSeriesRegistry.SeriesEntry monthlyEntry = registry
+                .acquire(new SeriesKey(256265L, IntervalKind.TIME_1MO), 2000)
+                .entry();
+        assertEquals(SessionAlignedSeriesIngestor.IngestResult.APPENDED, ingestor.ingest(monthlyEntry, ts(2026, 3, 18, 10, 0), 200.0, 1.0));
+        assertEquals(SessionAlignedSeriesIngestor.IngestResult.REPLACED, ingestor.ingest(monthlyEntry, ts(2026, 3, 31, 15, 0), 210.0, 3.0));
+        var monthlySeries = monthlyEntry.series();
+        assertEquals(ts(2026, 3, 1, 0, 0), monthlySeries.getBar(0).getBeginTime().toEpochMilli());
+        assertEquals(ts(2026, 4, 1, 0, 0), monthlySeries.getBar(0).getEndTime().toEpochMilli());
+        assertEquals("200.0", monthlySeries.getBar(0).getOpenPrice().toString());
+        assertEquals("210.0", monthlySeries.getBar(0).getClosePrice().toString());
+    }
+
     private long ts(int year, int month, int day, int hour, int minute) {
         return ZonedDateTime.of(year, month, day, hour, minute, 0, 0, IST).toInstant().toEpochMilli();
     }

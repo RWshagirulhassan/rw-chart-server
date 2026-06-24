@@ -15,10 +15,8 @@ class ArchitectureStructureTest {
         Path root = Path.of(System.getProperty("user.dir"), "src", "main", "java", "com", "readywealth", "trading", "trade_engine");
 
         List<String> contexts = List.of(
-                "alerts",
                 "auth",
                 "engine",
-                "execution",
                 "marketdata",
                 "session",
                 "strategy"
@@ -42,8 +40,6 @@ class ArchitectureStructureTest {
         List<String> required = List.of(
                 "auth/api/http",
                 "engine/api/http",
-                "execution/api/http",
-                "execution/api/ws",
                 "marketdata/api/http",
                 "marketdata/api/ws",
                 "session/api/http"
