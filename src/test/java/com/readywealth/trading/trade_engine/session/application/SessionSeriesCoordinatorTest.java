@@ -14,6 +14,7 @@ import org.mockito.InOrder;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
+import java.time.Instant;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -149,5 +150,87 @@ class SessionSeriesCoordinatorTest {
                 Mockito.any());
         inOrder.verify(subscriptionService).subscribeInternal(Mockito.eq("ui-series-registry"), Mockito.anyList());
         inOrder.verify(bootstrapCoordinator).bootstrapUiSeriesAsync(Mockito.any());
+    }
+
+    @Test
+    void healthyRetainedSeriesReusesWithoutReservingBootstrapAgain() {
+        InMemoryConcurrentBarSeriesRegistry registry = new InMemoryConcurrentBarSeriesRegistry();
+        SeriesRefManager refManager = new SeriesRefManager();
+        SubscriptionService subscriptionService = Mockito.mock(SubscriptionService.class);
+        SessionBootstrapCoordinator bootstrapCoordinator = Mockito.mock(SessionBootstrapCoordinator.class);
+        SessionSeriesCoordinator coordinator = new SessionSeriesCoordinator(
+                registry,
+                refManager,
+                subscriptionService,
+                bootstrapCoordinator,
+                new SimpleMeterRegistry());
+
+        String key = SeriesKeyCodec.encode(new com.readywealth.trading.trade_engine.engine.domain.series.SeriesKey(256265L, IntervalKind.TIME_1M));
+        coordinator.createSession("u1", List.of(key), 1000, true);
+        var entry = registry.get(SeriesKeyCodec.decode(key)).orElseThrow();
+        long runId = entry.bootstrapState().reserve(Instant.now(), false);
+        entry.bootstrapState().markSeeded(12);
+        entry.bootstrapState().markCompleted(runId);
+
+        var reused = coordinator.createSession("u1", List.of(key), 1000, true);
+        var snapshot = coordinator.snapshot("u1", reused.sessionId(), SeriesKeyCodec.decode(key));
+
+        assertEquals("HEALTHY_REUSED", snapshot.seriesHealthStatus());
+        assertEquals("REUSED_HEALTHY", snapshot.seriesReuseDecision());
+        Mockito.verify(bootstrapCoordinator, times(1)).reserveUiSeriesBootstrap(Mockito.anyString(), Mockito.any(), Mockito.any());
+    }
+
+    @Test
+    void staleRetainedExclusiveSeriesIsRebuiltAndReservedAgain() {
+        InMemoryConcurrentBarSeriesRegistry registry = new InMemoryConcurrentBarSeriesRegistry();
+        SeriesRefManager refManager = new SeriesRefManager();
+        SubscriptionService subscriptionService = Mockito.mock(SubscriptionService.class);
+        SessionBootstrapCoordinator bootstrapCoordinator = Mockito.mock(SessionBootstrapCoordinator.class);
+        SessionSeriesCoordinator coordinator = new SessionSeriesCoordinator(
+                registry,
+                refManager,
+                subscriptionService,
+                bootstrapCoordinator,
+                new SimpleMeterRegistry());
+
+        String key = SeriesKeyCodec.encode(new com.readywealth.trading.trade_engine.engine.domain.series.SeriesKey(256265L, IntervalKind.TIME_1M));
+        coordinator.createSession("u1", List.of(key), 1000, false);
+        var existing = registry.get(SeriesKeyCodec.decode(key)).orElseThrow();
+        existing.bootstrapState().forceDegraded("live_bars_without_historical_seed");
+
+        var rebuilt = coordinator.createSession("u1", List.of(key), 1000, true);
+        var snapshot = coordinator.snapshot("u1", rebuilt.sessionId(), SeriesKeyCodec.decode(key));
+
+        assertEquals("REBUILDING", snapshot.seriesHealthStatus());
+        assertEquals("REBUILT_STALE_RETAINED", snapshot.seriesReuseDecision());
+        Mockito.verify(bootstrapCoordinator, times(2)).reserveUiSeriesBootstrap(Mockito.anyString(), Mockito.any(), Mockito.any());
+    }
+
+    @Test
+    void staleSharedActiveSeriesIsSurfacedWithoutBootstrapReserve() {
+        InMemoryConcurrentBarSeriesRegistry registry = new InMemoryConcurrentBarSeriesRegistry();
+        SeriesRefManager refManager = new SeriesRefManager();
+        SubscriptionService subscriptionService = Mockito.mock(SubscriptionService.class);
+        SessionBootstrapCoordinator bootstrapCoordinator = Mockito.mock(SessionBootstrapCoordinator.class);
+        SessionSeriesCoordinator coordinator = new SessionSeriesCoordinator(
+                registry,
+                refManager,
+                subscriptionService,
+                bootstrapCoordinator,
+                new SimpleMeterRegistry());
+
+        String key = SeriesKeyCodec.encode(new com.readywealth.trading.trade_engine.engine.domain.series.SeriesKey(256265L, IntervalKind.TIME_1M));
+        UiSession activeOwner = coordinator.createSession("u1", List.of(key), 1000, false);
+        coordinator.onWsConnected("u1", activeOwner.sessionId());
+        var existing = registry.get(SeriesKeyCodec.decode(key)).orElseThrow();
+        existing.bootstrapState().forceDegraded("live_bars_without_historical_seed");
+
+        var shared = coordinator.createSession("u1", List.of(key), 1000, true);
+        var snapshot = coordinator.snapshot("u1", shared.sessionId(), SeriesKeyCodec.decode(key));
+
+        assertEquals("STALE_SHARED", snapshot.seriesHealthStatus());
+        assertEquals("live_bars_without_historical_seed", snapshot.seriesHealthReason());
+        assertEquals("STALE_SHARED", snapshot.seriesReuseDecision());
+        Mockito.verify(bootstrapCoordinator, times(1)).reserveUiSeriesBootstrap(Mockito.anyString(), Mockito.any(), Mockito.any());
     }
 }

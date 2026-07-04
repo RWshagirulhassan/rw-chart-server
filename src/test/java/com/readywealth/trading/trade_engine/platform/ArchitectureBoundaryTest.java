@@ -20,9 +20,7 @@ class ArchitectureBoundaryTest {
                 root.resolve("auth/domain"),
                 root.resolve("marketdata/domain"),
                 root.resolve("session/domain"),
-                root.resolve("strategy/domain"),
-                root.resolve("execution/domain"),
-                root.resolve("alerts/domain")
+                root.resolve("strategy/domain")
         );
 
         List<String> forbiddenPrefixes = List.of(

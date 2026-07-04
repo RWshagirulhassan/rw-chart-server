@@ -35,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.time.ZoneId;
 import java.time.OffsetDateTime;
 import java.time.Instant;
+import java.util.Comparator;
 
 @Service
 public class SessionSeriesCoordinator implements SessionRoutingPort {
@@ -130,7 +131,7 @@ public class SessionSeriesCoordinator implements SessionRoutingPort {
 
         AttachDetachResult result = attachSeriesInternal(session, keys, maxBarCount);
         applyUpstreamTransitions(result);
-        keys.forEach(bootstrapCoordinator::bootstrapUiSeriesAsync);
+        result.keysToBootstrap().forEach(bootstrapCoordinator::bootstrapUiSeriesAsync);
         logRegistryHubStateForSeries("session_create", session, keys, null);
 
         sessionCreateCounter.increment();
@@ -145,7 +146,7 @@ public class SessionSeriesCoordinator implements SessionRoutingPort {
 
         AttachDetachResult result = attachSeriesInternal(session, keys, SeriesConfig.liveDefault().maximumBarCount());
         applyUpstreamTransitions(result);
-        keys.forEach(bootstrapCoordinator::bootstrapUiSeriesAsync);
+        result.keysToBootstrap().forEach(bootstrapCoordinator::bootstrapUiSeriesAsync);
         return session;
     }
 
@@ -312,7 +313,10 @@ public class SessionSeriesCoordinator implements SessionRoutingPort {
                 entry.bootstrapState().snapshot().error(),
                 entry.bootstrapState().snapshot().seededBars(),
                 entry.bootstrapState().snapshot().replayedTicks(),
-                entry.bootstrapState().snapshot().droppedTicks());
+                entry.bootstrapState().snapshot().droppedTicks(),
+                entry.seriesHealthState().snapshot().status().name(),
+                entry.seriesHealthState().snapshot().reason(),
+                entry.seriesHealthState().snapshot().reuseDecision().name());
     }
 
     private static final class SnapshotWindow {
@@ -348,6 +352,10 @@ public class SessionSeriesCoordinator implements SessionRoutingPort {
     @Override
     public synchronized Set<UiSessionId> sessionsForSeries(SeriesKey seriesKey) {
         return new HashSet<>(sessionsBySeries.getOrDefault(seriesKey, Collections.emptySet()));
+    }
+
+    public synchronized java.util.Optional<InMemoryConcurrentBarSeriesRegistry.SeriesEntry> seriesEntry(SeriesKey seriesKey) {
+        return seriesRegistry.get(seriesKey);
     }
 
     public int activeSessions() {
@@ -417,14 +425,46 @@ public class SessionSeriesCoordinator implements SessionRoutingPort {
 
     private AttachDetachResult attachSeriesInternal(UiSession session, List<SeriesKey> keys, int maxBarCount) {
         Set<Long> instrumentsToSubscribe = new LinkedHashSet<>();
+        Set<SeriesKey> keysToBootstrap = new LinkedHashSet<>();
 
         for (SeriesKey key : keys) {
             if (!session.attach(key)) {
                 continue;
             }
-            InMemoryConcurrentBarSeriesRegistry.AcquireResult acquire = seriesRegistry.acquire(key, maxBarCount);
-            if (acquire.created()) {
+
+            InMemoryConcurrentBarSeriesRegistry.SeriesEntry existingEntry = seriesRegistry.get(key).orElse(null);
+            Set<UiSessionId> ownerSessionIds = new LinkedHashSet<>(
+                    sessionsBySeries.getOrDefault(key, Collections.emptySet()));
+            int activeOwnerCount = countActiveOwners(ownerSessionIds);
+            AttachDecisionContext decisionContext = classifyAttachDecision(existingEntry, ownerSessionIds, activeOwnerCount);
+
+            if (decisionContext.decision() == InMemoryConcurrentBarSeriesRegistry.SeriesReuseDecision.REBUILT_STALE_RETAINED
+                    && existingEntry != null) {
+                if (runtimeManager != null) {
+                    try {
+                        runtimeManager.stopAndRemove(key);
+                    } catch (Exception stopError) {
+                        log.warn("series_runtime_stop_rebuild_failed sessionId={} seriesKey={} reason={}",
+                                session.sessionId().value(),
+                                SeriesKeyCodec.encode(key),
+                                stopError.getMessage(),
+                                stopError);
+                    }
+                }
+                int preservedRefs = Math.max(ownerSessionIds.size(), existingEntry.seriesRefCount().get());
+                int effectiveMaxBarCount = Math.max(existingEntry.maxBarCount(), maxBarCount);
+                existingEntry = seriesRegistry.replaceWithFreshEntry(key, effectiveMaxBarCount, preservedRefs);
+            }
+
+            InMemoryConcurrentBarSeriesRegistry.AcquireResult acquire = seriesRegistry.acquire(
+                    key,
+                    existingEntry == null ? maxBarCount : Math.max(existingEntry.maxBarCount(), maxBarCount));
+            applySeriesHealthForAttach(acquire.entry(), decisionContext);
+            if (decisionContext.shouldReserveBootstrap()) {
                 bootstrapCoordinator.reserveUiSeriesBootstrap(session.sessionId().value(), key, acquire.entry());
+                keysToBootstrap.add(key);
+            } else if (decisionContext.shouldEmitTerminalSnapshot()) {
+                keysToBootstrap.add(key);
             }
             if (runtimeManager != null) {
                 runtimeManager.ensureRuntimeForSeries(key);
@@ -437,14 +477,20 @@ public class SessionSeriesCoordinator implements SessionRoutingPort {
                 instrumentsToSubscribe.add(key.instrumentToken());
             }
             seriesAttachCounter.increment();
-            log.info("series_attached sessionId={} seriesKey={} seriesCreated={} seriesRef={} instrumentRef={}",
+            log.info("series_attached sessionId={} seriesKey={} decision={} healthStatus={} healthReason={} priorSeriesRefs={} ownerSessionIds={} activeOwnerCount={} seriesCreated={} seriesRef={} instrumentRef={}",
                     session.sessionId().value(),
                     SeriesKeyCodec.encode(key),
+                    decisionContext.decision().name(),
+                    decisionContext.healthStatus().name(),
+                    decisionContext.reason(),
+                    existingEntry == null ? 0 : existingEntry.seriesRefCount().get(),
+                    ownerSessionIds.stream().map(UiSessionId::value).sorted().toList(),
+                    activeOwnerCount,
                     acquire.created(),
                     acquire.entry().seriesRefCount().get(),
                     transition.current());
         }
-        return new AttachDetachResult(instrumentsToSubscribe, Set.of());
+        return new AttachDetachResult(instrumentsToSubscribe, Set.of(), keysToBootstrap);
     }
 
     private AttachDetachResult detachSeriesInternal(UiSession session, List<SeriesKey> keys) {
@@ -510,7 +556,7 @@ public class SessionSeriesCoordinator implements SessionRoutingPort {
                     runtimeStoppedPreRelease);
         }
         session.touch();
-        return new AttachDetachResult(Set.of(), instrumentsToUnsubscribe);
+        return new AttachDetachResult(Set.of(), instrumentsToUnsubscribe, Set.of());
     }
 
     private boolean closeSessionInternal(UiSession session, String reason) {
@@ -647,9 +693,148 @@ public class SessionSeriesCoordinator implements SessionRoutingPort {
         return out;
     }
 
+    private int countActiveOwners(Set<UiSessionId> ownerSessionIds) {
+        int active = 0;
+        for (UiSessionId ownerSessionId : ownerSessionIds) {
+            UiSession owner = sessions.get(ownerSessionId);
+            if (owner != null && owner.connectedClients() > 0) {
+                active++;
+            }
+        }
+        return active;
+    }
+
+    private AttachDecisionContext classifyAttachDecision(
+            InMemoryConcurrentBarSeriesRegistry.SeriesEntry entry,
+            Set<UiSessionId> ownerSessionIds,
+            int activeOwnerCount) {
+        if (entry == null) {
+            return new AttachDecisionContext(
+                    InMemoryConcurrentBarSeriesRegistry.SeriesReuseDecision.FRESH_CREATE,
+                    InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.FRESH_BOOTSTRAPPING,
+                    "fresh_series_created",
+                    true,
+                    false);
+        }
+
+        String stalenessReason = staleReason(entry);
+        if (stalenessReason == null) {
+            InMemoryConcurrentBarSeriesRegistry.BootstrapSnapshot snapshot = entry.bootstrapState().snapshot();
+            if (snapshot.status() == InMemoryConcurrentBarSeriesRegistry.BootstrapStatus.RUNNING) {
+                return new AttachDecisionContext(
+                        InMemoryConcurrentBarSeriesRegistry.SeriesReuseDecision.REUSED_HEALTHY,
+                        InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.FRESH_BOOTSTRAPPING,
+                        "existing_series_bootstrap_running_reused",
+                        false,
+                        true);
+            }
+            return new AttachDecisionContext(
+                    InMemoryConcurrentBarSeriesRegistry.SeriesReuseDecision.REUSED_HEALTHY,
+                    InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.HEALTHY_REUSED,
+                    "existing_series_healthy_reused",
+                    false,
+                    true);
+        }
+
+        if (activeOwnerCount > 0) {
+            return new AttachDecisionContext(
+                    InMemoryConcurrentBarSeriesRegistry.SeriesReuseDecision.STALE_SHARED,
+                    InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.STALE_SHARED,
+                    stalenessReason,
+                    false,
+                    true);
+        }
+
+        return new AttachDecisionContext(
+                InMemoryConcurrentBarSeriesRegistry.SeriesReuseDecision.REBUILT_STALE_RETAINED,
+                InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.REBUILDING,
+                stalenessReason,
+                true,
+                false);
+    }
+
+    private String staleReason(InMemoryConcurrentBarSeriesRegistry.SeriesEntry entry) {
+        if (entry == null) {
+            return "series_missing";
+        }
+        if (!isChronologicallyOrdered(entry)) {
+            return "series_order_invalid";
+        }
+        InMemoryConcurrentBarSeriesRegistry.BootstrapSnapshot snapshot = entry.bootstrapState().snapshot();
+        boolean hasBars = seriesHasBars(entry);
+        if (snapshot.status() == InMemoryConcurrentBarSeriesRegistry.BootstrapStatus.DEGRADED
+                || (snapshot.error() != null && !snapshot.error().isBlank())) {
+            return snapshot.error() == null || snapshot.error().isBlank()
+                    ? "bootstrap_degraded"
+                    : snapshot.error();
+        }
+        if (snapshot.status() == InMemoryConcurrentBarSeriesRegistry.BootstrapStatus.COMPLETED
+                && snapshot.seededBars() > 0) {
+            return null;
+        }
+        if (snapshot.status() == InMemoryConcurrentBarSeriesRegistry.BootstrapStatus.RUNNING) {
+            return null;
+        }
+        if (hasBars && snapshot.seededBars() <= 0) {
+            return "live_bars_without_historical_seed";
+        }
+        return "historical_bootstrap_incomplete";
+    }
+
+    private boolean isChronologicallyOrdered(InMemoryConcurrentBarSeriesRegistry.SeriesEntry entry) {
+        var series = entry.series();
+        return series.withReadLock(() -> {
+            int begin = series.getBeginIndex();
+            int end = series.getEndIndex();
+            if (begin < 0 || end < 0 || begin > end) {
+                return true;
+            }
+            Instant previousEnd = null;
+            for (int index = begin; index <= end; index++) {
+                var bar = series.getBar(index);
+                Instant currentBegin = bar.getBeginTime();
+                Instant currentEnd = bar.getEndTime();
+                if (previousEnd != null && currentBegin.isBefore(previousEnd)) {
+                    return false;
+                }
+                if (currentEnd.isBefore(currentBegin)) {
+                    return false;
+                }
+                previousEnd = currentEnd;
+            }
+            return true;
+        });
+    }
+
+    private boolean seriesHasBars(InMemoryConcurrentBarSeriesRegistry.SeriesEntry entry) {
+        var series = entry.series();
+        return series.withReadLock(() -> series.getBeginIndex() >= 0 && series.getEndIndex() >= series.getBeginIndex());
+    }
+
+    private void applySeriesHealthForAttach(
+            InMemoryConcurrentBarSeriesRegistry.SeriesEntry entry,
+            AttachDecisionContext decisionContext) {
+        entry.seriesHealthState().mark(
+                decisionContext.healthStatus(),
+                decisionContext.reason(),
+                decisionContext.decision());
+        if (decisionContext.healthStatus() == InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus.STALE_SHARED) {
+            entry.bootstrapState().forceDegraded("stale_shared_series_requires_rebuild");
+        }
+    }
+
     private record AttachDetachResult(
             Set<Long> instrumentsToSubscribe,
-            Set<Long> instrumentsToUnsubscribe) {
+            Set<Long> instrumentsToUnsubscribe,
+            Set<SeriesKey> keysToBootstrap) {
+    }
+
+    private record AttachDecisionContext(
+            InMemoryConcurrentBarSeriesRegistry.SeriesReuseDecision decision,
+            InMemoryConcurrentBarSeriesRegistry.SeriesHealthStatus healthStatus,
+            String reason,
+            boolean shouldReserveBootstrap,
+            boolean shouldEmitTerminalSnapshot) {
     }
 
     public record BootstrapAggregate(

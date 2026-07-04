@@ -4,12 +4,16 @@ import com.readywealth.trading.trade_engine.engine.domain.series.Candle;
 import com.readywealth.trading.trade_engine.engine.domain.series.CandleCause;
 import com.readywealth.trading.trade_engine.engine.domain.series.IntervalKind;
 import com.readywealth.trading.trade_engine.marketdata.application.AuthTokenProvider;
+import com.readywealth.trading.trade_engine.marketdata.application.HistoricalRequestRateLimiter;
+import com.readywealth.trading.trade_engine.marketdata.application.SessionCandleBoundaryService;
+import com.readywealth.trading.trade_engine.marketdata.infrastructure.config.BootstrapSchedulerProperties;
+import com.readywealth.trading.trade_engine.marketdata.infrastructure.config.PublisherProperties;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -79,6 +83,8 @@ class HttpHistoricalCandleClientTest {
         assertEquals(10, method.invoke(client, IntervalKind.TIME_15M));
         assertEquals(60, method.invoke(client, IntervalKind.TIME_1H));
         assertEquals(600, method.invoke(client, IntervalKind.TIME_1D));
+        assertEquals(1500, method.invoke(client, IntervalKind.TIME_1W));
+        assertEquals(2300, method.invoke(client, IntervalKind.TIME_1MO));
         assertEquals(0, method.invoke(client, IntervalKind.TIME_2H));
     }
 
@@ -187,8 +193,7 @@ class HttpHistoricalCandleClientTest {
         assertEquals(liveStart, out.get(0).startTimeEpochMs());
         assertEquals(now.toInstant().toEpochMilli(), out.get(0).endTimeEpochMs());
         assertEquals(2, client.calls.size());
-        assertTrue(client.calls.get(0).contains("T09:15"));
-        assertTrue(client.calls.get(1).contains("T09:15"));
+        assertTrue(client.calls.get(1).from().toString().contains("T09:15"));
     }
 
     @Test
@@ -231,6 +236,97 @@ class HttpHistoricalCandleClientTest {
         assertEquals(1, out.size());
         long expectedStart = ZonedDateTime.of(2026, 3, 2, 9, 15, 0, 0, zone).toInstant().toEpochMilli();
         assertEquals(expectedStart, out.get(0).startTimeEpochMs());
+    }
+
+    @Test
+    void fetchRecentWeeklyCandlesAggregatesDailySourceAndUsesDayInterval() {
+        BootstrapSchedulerProperties properties = new BootstrapSchedulerProperties();
+        properties.getHistorical().getLookback().setTime1w(8);
+        StubHistoricalClient client = newStubClient(properties);
+        ZoneId zone = ZoneId.of("Asia/Kolkata");
+        ZonedDateTime now = ZonedDateTime.of(2026, 3, 11, 14, 0, 0, 0, zone); // Wednesday
+
+        client.responses.add(List.of(
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 2, 0, 0), ts(2026, 3, 3, 0, 0), 100.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 3, 0, 0), ts(2026, 3, 4, 0, 0), 110.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 4, 0, 0), ts(2026, 3, 5, 0, 0), 120.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 5, 0, 0), ts(2026, 3, 6, 0, 0), 130.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 6, 0, 0), ts(2026, 3, 7, 0, 0), 140.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 9, 0, 0), ts(2026, 3, 10, 0, 0), 150.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 10, 0, 0), ts(2026, 3, 11, 0, 0), 160.0)
+        ));
+        client.responses.add(List.of(
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 11, 0, 0), ts(2026, 3, 12, 0, 0), 170.0)
+        ));
+
+        List<Candle> out = client.fetchRecentCandlesAt(115626503L, IntervalKind.TIME_1W, now);
+
+        assertEquals(2, out.size());
+        assertEquals(ts(2026, 3, 2, 0, 0), out.get(0).startTimeEpochMs());
+        assertEquals(ts(2026, 3, 9, 0, 0), out.get(1).startTimeEpochMs());
+        assertEquals(ts(2026, 3, 16, 0, 0), out.get(1).endTimeEpochMs());
+        assertEquals(IntervalKind.TIME_1W, out.get(1).intervalKind());
+        assertEquals(IntervalKind.TIME_1D, client.calls.get(0).intervalKind());
+        assertEquals(IntervalKind.TIME_1D, client.calls.get(1).intervalKind());
+    }
+
+    @Test
+    void fetchRecentWeeklyCandlesAppliesConfiguredRecentLimit() {
+        BootstrapSchedulerProperties properties = new BootstrapSchedulerProperties();
+        properties.getHistorical().getLookback().setTime1w(13);
+        properties.getHistorical().getRecentLimit().setTime1w(2);
+        StubHistoricalClient client = newStubClient(properties);
+        ZoneId zone = ZoneId.of("Asia/Kolkata");
+        ZonedDateTime now = ZonedDateTime.of(2026, 3, 18, 14, 0, 0, 0, zone); // Wednesday
+
+        client.responses.add(List.of(
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 2, 0, 0), ts(2026, 3, 3, 0, 0), 100.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 3, 0, 0), ts(2026, 3, 4, 0, 0), 110.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 4, 0, 0), ts(2026, 3, 5, 0, 0), 120.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 5, 0, 0), ts(2026, 3, 6, 0, 0), 130.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 6, 0, 0), ts(2026, 3, 7, 0, 0), 140.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 9, 0, 0), ts(2026, 3, 10, 0, 0), 150.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 10, 0, 0), ts(2026, 3, 11, 0, 0), 160.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 11, 0, 0), ts(2026, 3, 12, 0, 0), 170.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 12, 0, 0), ts(2026, 3, 13, 0, 0), 180.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 13, 0, 0), ts(2026, 3, 14, 0, 0), 190.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 16, 0, 0), ts(2026, 3, 17, 0, 0), 200.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 17, 0, 0), ts(2026, 3, 18, 0, 0), 210.0)
+        ));
+        client.responses.add(List.of(
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 18, 0, 0), ts(2026, 3, 19, 0, 0), 220.0)
+        ));
+
+        List<Candle> out = client.fetchRecentCandlesAt(115626503L, IntervalKind.TIME_1W, now);
+
+        assertEquals(2, out.size());
+        assertEquals(ts(2026, 3, 9, 0, 0), out.get(0).startTimeEpochMs());
+        assertEquals(ts(2026, 3, 16, 0, 0), out.get(1).startTimeEpochMs());
+    }
+
+    @Test
+    void fetchCandlesInRangeAggregatesMonthlyCandlesFromChunkedDailyRequests() {
+        StubHistoricalClient client = newStubClientWithChunkDays(30);
+        Instant from = ZonedDateTime.of(2026, 3, 10, 0, 0, 0, 0, ZoneId.of("Asia/Kolkata")).toInstant();
+        Instant to = ZonedDateTime.of(2026, 4, 10, 0, 0, 0, 0, ZoneId.of("Asia/Kolkata")).toInstant();
+
+        client.responses.add(List.of(
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 1, 0, 0), ts(2026, 3, 2, 0, 0), 100.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 3, 31, 0, 0), ts(2026, 4, 1, 0, 0), 150.0)
+        ));
+        client.responses.add(List.of(
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 4, 1, 0, 0), ts(2026, 4, 2, 0, 0), 160.0),
+                candle(115626503L, IntervalKind.TIME_1D, ts(2026, 4, 10, 0, 0), ts(2026, 4, 11, 0, 0), 170.0)
+        ));
+
+        List<Candle> out = client.fetchCandlesInRange(115626503L, IntervalKind.TIME_1MO, from, to);
+
+        assertEquals(2, out.size());
+        assertEquals(ts(2026, 3, 1, 0, 0), out.get(0).startTimeEpochMs());
+        assertEquals(ts(2026, 4, 1, 0, 0), out.get(1).startTimeEpochMs());
+        assertEquals(ts(2026, 5, 1, 0, 0), out.get(1).endTimeEpochMs());
+        assertTrue(client.calls.size() >= 2);
+        assertEquals(IntervalKind.TIME_1D, client.calls.get(0).intervalKind());
     }
 
     @Test
@@ -299,15 +395,29 @@ class HttpHistoricalCandleClientTest {
         return new StubHistoricalClient(authTokenProvider);
     }
 
+    private static StubHistoricalClient newStubClientWithChunkDays(int chunkDays) {
+        BootstrapSchedulerProperties properties = new BootstrapSchedulerProperties();
+        properties.getHistorical().setChunkDays(chunkDays);
+        return newStubClient(properties);
+    }
+
+    private static StubHistoricalClient newStubClient(BootstrapSchedulerProperties properties) {
+        AuthTokenProvider authTokenProvider = newTokenProvider();
+        return new StubHistoricalClient(authTokenProvider, properties);
+    }
+
     private static ReplayHistoricalClient newReplayClient() {
         AuthTokenProvider authTokenProvider = newTokenProvider();
         return new ReplayHistoricalClient(authTokenProvider);
     }
 
     private static AuthTokenProvider newTokenProvider() {
-        AuthTokenProvider authTokenProvider = Mockito.mock(AuthTokenProvider.class);
-        Mockito.when(authTokenProvider.getValidAccessToken()).thenReturn(Optional.of("token"));
-        return authTokenProvider;
+        return new AuthTokenProvider(null, new PublisherProperties()) {
+            @Override
+            public synchronized Optional<String> getValidAccessToken() {
+                return Optional.of("token");
+            }
+        };
     }
 
     private static Candle candle(long instrumentToken, IntervalKind intervalKind, long start, long end, double close) {
@@ -316,15 +426,27 @@ class HttpHistoricalCandleClientTest {
 
     private static class StubHistoricalClient extends HttpHistoricalCandleClient {
         private final List<List<Candle>> responses = new ArrayList<>();
-        private final List<String> calls = new ArrayList<>();
+        private final List<HistoricalCall> calls = new ArrayList<>();
 
         private StubHistoricalClient(AuthTokenProvider authTokenProvider) {
             super(authTokenProvider, "https://api.kite.trade", "api-key", "Asia/Kolkata", "09:15", "15:30");
         }
 
+        private StubHistoricalClient(AuthTokenProvider authTokenProvider, BootstrapSchedulerProperties properties) {
+            super(
+                    authTokenProvider,
+                    new SessionCandleBoundaryService("Asia/Kolkata", "09:15", "15:30"),
+                    "https://api.kite.trade",
+                    "api-key",
+                    new RestTemplate(),
+                    new HistoricalRequestRateLimiter(properties),
+                    properties,
+                    true);
+        }
+
         @Override
         protected List<Candle> fetchHistorical(long instrumentToken, IntervalKind intervalKind, String accessToken, ZonedDateTime from, ZonedDateTime to) {
-            calls.add(from + "->" + to);
+            calls.add(new HistoricalCall(intervalKind, from, to));
             if (responses.isEmpty()) {
                 return List.of();
             }
@@ -365,5 +487,14 @@ class HttpHistoricalCandleClientTest {
         protected ResponseEntity<KiteHistoricalResponse> executeHistoricalRequest(RequestEntity<Void> request) {
             return ResponseEntity.ok(new KiteHistoricalResponse());
         }
+    }
+
+    private record HistoricalCall(IntervalKind intervalKind, ZonedDateTime from, ZonedDateTime to) {
+    }
+
+    private static long ts(int year, int month, int day, int hour, int minute) {
+        return ZonedDateTime.of(year, month, day, hour, minute, 0, 0, ZoneId.of("Asia/Kolkata"))
+                .toInstant()
+                .toEpochMilli();
     }
 }

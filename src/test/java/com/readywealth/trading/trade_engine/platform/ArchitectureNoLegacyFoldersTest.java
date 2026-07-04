@@ -19,10 +19,8 @@ class ArchitectureNoLegacyFoldersTest {
         Path root = Path.of(System.getProperty("user.dir"), "src", "main", "java", "com", "readywealth", "trading", "trade_engine");
 
         List<String> contexts = List.of(
-                "alerts",
                 "auth",
                 "engine",
-                "execution",
                 "marketdata",
                 "session",
                 "strategy"

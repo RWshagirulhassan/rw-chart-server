@@ -20,5 +20,7 @@ class IntervalKindMapperTest {
     @Test
     void rejectsTickIntervals() {
         assertThrows(IllegalArgumentException.class, () -> IntervalKindMapper.toDuration(IntervalKind.TICK_10T));
+        assertThrows(IllegalArgumentException.class, () -> IntervalKindMapper.toDuration(IntervalKind.TIME_1W));
+        assertThrows(IllegalArgumentException.class, () -> IntervalKindMapper.toDuration(IntervalKind.TIME_1MO));
     }
 }

@@ -20,5 +20,8 @@ public record SeriesSnapshotResponse(
         String bootstrapError,
         long bootstrapSeededBars,
         long bootstrapReplayedTicks,
-        long bootstrapDroppedTicks) {
+        long bootstrapDroppedTicks,
+        String seriesHealthStatus,
+        String seriesHealthReason,
+        String seriesReuseDecision) {
 }

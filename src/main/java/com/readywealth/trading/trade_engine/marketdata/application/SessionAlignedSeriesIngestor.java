@@ -1,6 +1,7 @@
 package com.readywealth.trading.trade_engine.marketdata.application;
 
 import com.readywealth.trading.trade_engine.engine.domain.series.IntervalKind;
+import com.readywealth.trading.trade_engine.engine.domain.series.IntervalDescriptor;
 import com.readywealth.trading.trade_engine.session.infrastructure.memory.InMemoryConcurrentBarSeriesRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -34,29 +35,29 @@ public class SessionAlignedSeriesIngestor {
 
     public IngestResult ingest(InMemoryConcurrentBarSeriesRegistry.SeriesEntry entry, long timestampMs, double price, double volume) {
         IntervalKind intervalKind = entry.seriesKey().timeframe();
-        Duration barDuration = entry.timePeriod();
+        IntervalDescriptor descriptor = entry.intervalDescriptor();
         Instant timestamp = Instant.ofEpochMilli(timestampMs);
         ConcurrentBarSeries series = entry.series();
         Num volumeNum = series.numFactory().numOf(Math.max(0d, volume));
         Num priceNum = series.numFactory().numOf(price);
 
-        boolean intraday = boundaryService.isIntradayInterval(intervalKind, barDuration);
-        if (intraday && !boundaryService.isTradableInstant(timestamp, intervalKind, barDuration)) {
+        boolean intraday = boundaryService.isIntradayInterval(descriptor);
+        if (intraday && !boundaryService.isTradableInstant(timestamp, descriptor)) {
             return IngestResult.DROPPED_OUT_OF_SESSION;
         }
         return series.withWriteLock(() ->
-                ingestBucketAlignedLocked(series, intervalKind, barDuration, timestamp, priceNum, volumeNum));
+                ingestBucketAlignedLocked(series, intervalKind, descriptor, timestamp, priceNum, volumeNum));
     }
 
     private IngestResult ingestBucketAlignedLocked(
             ConcurrentBarSeries series,
             IntervalKind intervalKind,
-            Duration barDuration,
+            IntervalDescriptor descriptor,
             Instant timestamp,
             Num priceNum,
             Num volumeNum) {
-        Instant bucketStart = boundaryService.floorToBucketStart(timestamp, barDuration, intervalKind);
-        Instant bucketEnd = boundaryService.bucketEnd(bucketStart, barDuration, intervalKind);
+        Instant bucketStart = boundaryService.floorToBucketStart(timestamp, descriptor);
+        Instant bucketEnd = boundaryService.bucketEnd(bucketStart, descriptor);
         if (!bucketEnd.isAfter(bucketStart)) {
             return IngestResult.DROPPED_OUT_OF_SESSION;
         }

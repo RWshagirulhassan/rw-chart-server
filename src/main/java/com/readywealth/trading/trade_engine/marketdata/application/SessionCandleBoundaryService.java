@@ -1,6 +1,8 @@
 package com.readywealth.trading.trade_engine.marketdata.application;
 
+import com.readywealth.trading.trade_engine.engine.domain.series.IntervalDescriptor;
 import com.readywealth.trading.trade_engine.engine.domain.series.IntervalKind;
+import com.readywealth.trading.trade_engine.engine.domain.series.IntervalDescriptors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -55,11 +57,15 @@ public class SessionCandleBoundaryService {
     }
 
     public ZonedDateTime clampToTradableNow(ZonedDateTime now, IntervalKind intervalKind, Duration barDuration) {
+        return clampToTradableNow(now, IntervalDescriptors.of(intervalKind));
+    }
+
+    public ZonedDateTime clampToTradableNow(ZonedDateTime now, IntervalDescriptor descriptor) {
         ZonedDateTime candidate = now.withZoneSameInstant(exchangeZoneId).withNano(0);
         if (isWeekend(candidate.toLocalDate())) {
             return ZonedDateTime.of(previousBusinessDay(candidate.toLocalDate()), marketCloseTime, exchangeZoneId);
         }
-        if (!isIntradayInterval(intervalKind, barDuration)) {
+        if (!descriptor.isIntraday()) {
             if (candidate.toLocalTime().isAfter(marketCloseTime)) {
                 return ZonedDateTime.of(candidate.toLocalDate(), marketCloseTime, exchangeZoneId);
             }
@@ -75,21 +81,37 @@ public class SessionCandleBoundaryService {
     }
 
     public ZonedDateTime floorToBucketStart(ZonedDateTime timestamp, Duration barDuration, IntervalKind intervalKind) {
+        return floorToBucketStart(timestamp, IntervalDescriptors.of(intervalKind));
+    }
+
+    public ZonedDateTime floorToBucketStart(ZonedDateTime timestamp, IntervalDescriptor descriptor) {
         ZonedDateTime candidate = timestamp.withZoneSameInstant(exchangeZoneId).withSecond(0).withNano(0);
-        if (!isIntradayInterval(intervalKind, barDuration)) {
-            return floorToWallClockBoundary(candidate, barDuration);
+        if (descriptor.isIntraday()) {
+            return floorToSessionBucket(candidate, descriptor.fixedDurationOrThrow());
         }
-        return floorToSessionBucket(candidate, barDuration);
+        return floorToCalendarBoundary(candidate, descriptor);
     }
 
     public Instant floorToBucketStart(Instant timestamp, Duration barDuration, IntervalKind intervalKind) {
-        return floorToBucketStart(timestamp.atZone(exchangeZoneId), barDuration, intervalKind).toInstant();
+        return floorToBucketStart(timestamp.atZone(exchangeZoneId), IntervalDescriptors.of(intervalKind)).toInstant();
+    }
+
+    public Instant floorToBucketStart(Instant timestamp, IntervalKind intervalKind) {
+        return floorToBucketStart(timestamp.atZone(exchangeZoneId), IntervalDescriptors.of(intervalKind)).toInstant();
+    }
+
+    public Instant floorToBucketStart(Instant timestamp, IntervalDescriptor descriptor) {
+        return floorToBucketStart(timestamp.atZone(exchangeZoneId), descriptor).toInstant();
     }
 
     public Instant nextBucketBoundary(Instant now, Duration barDuration, IntervalKind intervalKind) {
+        return nextBucketBoundary(now, IntervalDescriptors.of(intervalKind));
+    }
+
+    public Instant nextBucketBoundary(Instant now, IntervalDescriptor descriptor) {
         ZonedDateTime candidate = now.atZone(exchangeZoneId).withSecond(0).withNano(0);
-        if (!isIntradayInterval(intervalKind, barDuration)) {
-            return floorToWallClockBoundary(candidate, barDuration).plus(barDuration).toInstant();
+        if (!descriptor.isIntraday()) {
+            return advanceCalendarBucket(floorToCalendarBoundary(candidate, descriptor), descriptor).toInstant();
         }
         LocalDate date = candidate.toLocalDate();
         if (isWeekend(date)) {
@@ -102,11 +124,12 @@ public class SessionCandleBoundaryService {
         if (!time.isBefore(marketCloseTime)) {
             return ZonedDateTime.of(nextBusinessDay(date), marketOpenTime, exchangeZoneId).toInstant();
         }
+        Duration barDuration = descriptor.fixedDurationOrThrow();
         ZonedDateTime bucketStart = floorToSessionBucket(candidate, barDuration);
-        Instant boundary = bucketEnd(bucketStart.toInstant(), barDuration, intervalKind);
+        Instant boundary = bucketEnd(bucketStart.toInstant(), descriptor);
         if (!boundary.isAfter(candidate.toInstant())) {
             Instant nextStart = bucketStart.toInstant().plus(barDuration);
-            boundary = bucketEnd(nextStart, barDuration, intervalKind);
+            boundary = bucketEnd(nextStart, descriptor);
         }
         if (!boundary.isAfter(candidate.toInstant())) {
             return ZonedDateTime.of(nextBusinessDay(date), marketOpenTime, exchangeZoneId).toInstant();
@@ -115,20 +138,25 @@ public class SessionCandleBoundaryService {
     }
 
     public Instant bucketEnd(Instant bucketStart, Duration barDuration, IntervalKind intervalKind) {
-        Instant naturalEnd = bucketStart.plus(barDuration);
-        if (!isIntradayInterval(intervalKind, barDuration)) {
-            return naturalEnd;
-        }
+        return bucketEnd(bucketStart, IntervalDescriptors.of(intervalKind));
+    }
+
+    public Instant bucketEnd(Instant bucketStart, IntervalDescriptor descriptor) {
         ZonedDateTime startLocal = bucketStart.atZone(exchangeZoneId);
-        Instant sessionClose = ZonedDateTime.of(startLocal.toLocalDate(), marketCloseTime, exchangeZoneId).toInstant();
-        if (naturalEnd.isAfter(sessionClose)) {
-            return sessionClose;
+        if (!descriptor.isIntraday()) {
+            return advanceCalendarBucket(startLocal, descriptor).toInstant();
         }
-        return naturalEnd;
+        Instant naturalEnd = bucketStart.plus(descriptor.fixedDurationOrThrow());
+        Instant sessionClose = ZonedDateTime.of(startLocal.toLocalDate(), marketCloseTime, exchangeZoneId).toInstant();
+        return naturalEnd.isAfter(sessionClose) ? sessionClose : naturalEnd;
     }
 
     public boolean isTradableInstant(Instant timestamp, IntervalKind intervalKind, Duration barDuration) {
-        if (!isIntradayInterval(intervalKind, barDuration)) {
+        return isTradableInstant(timestamp, IntervalDescriptors.of(intervalKind));
+    }
+
+    public boolean isTradableInstant(Instant timestamp, IntervalDescriptor descriptor) {
+        if (!descriptor.isIntraday()) {
             return true;
         }
         ZonedDateTime local = timestamp.atZone(exchangeZoneId);
@@ -140,10 +168,11 @@ public class SessionCandleBoundaryService {
     }
 
     public boolean isIntradayInterval(IntervalKind intervalKind, Duration barDuration) {
-        return intervalKind != IntervalKind.TIME_1D
-                && barDuration != null
-                && barDuration.toMinutes() > 0
-                && barDuration.toMinutes() < 1440;
+        return IntervalDescriptors.of(intervalKind).isIntraday();
+    }
+
+    public boolean isIntradayInterval(IntervalDescriptor descriptor) {
+        return descriptor.isIntraday();
     }
 
     public LocalDate previousBusinessDay(LocalDate date) {
@@ -178,21 +207,36 @@ public class SessionCandleBoundaryService {
         return sessionStart.plus(Duration.ofMillis(bucketMillis * completedBuckets));
     }
 
-    private ZonedDateTime floorToWallClockBoundary(ZonedDateTime zdt, Duration barDuration) {
-        long minutes = barDuration.toMinutes();
-        if (minutes >= 1440) {
-            return ZonedDateTime.of(zdt.toLocalDate(), LocalTime.MIDNIGHT, exchangeZoneId).withSecond(0);
-        }
-        if (minutes >= 60 && minutes % 60 == 0) {
-            long hours = minutes / 60;
-            int flooredHour = (int) ((zdt.getHour() / hours) * hours);
-            return zdt.withHour(flooredHour).withMinute(0).withSecond(0);
-        }
-        if (minutes > 0) {
-            int flooredMinute = (int) ((zdt.getMinute() / minutes) * minutes);
-            return zdt.withMinute(flooredMinute).withSecond(0);
-        }
-        return zdt.withSecond(0);
+    private ZonedDateTime floorToCalendarBoundary(ZonedDateTime zdt, IntervalDescriptor descriptor) {
+        return switch (descriptor.kind()) {
+            case TIME_1D -> ZonedDateTime.of(zdt.toLocalDate(), LocalTime.MIDNIGHT, exchangeZoneId).withSecond(0);
+            case TIME_1W -> {
+                LocalDate date = zdt.toLocalDate();
+                while (date.getDayOfWeek() != DayOfWeek.MONDAY) {
+                    date = date.minusDays(1);
+                }
+                yield ZonedDateTime.of(date, LocalTime.MIDNIGHT, exchangeZoneId).withSecond(0);
+            }
+            case TIME_1MO -> ZonedDateTime.of(
+                    zdt.getYear(),
+                    zdt.getMonthValue(),
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    exchangeZoneId).withSecond(0);
+            default -> throw new IllegalArgumentException("Unsupported calendar interval: " + descriptor.kind());
+        };
+    }
+
+    private ZonedDateTime advanceCalendarBucket(ZonedDateTime start, IntervalDescriptor descriptor) {
+        return switch (descriptor.kind()) {
+            case TIME_1D -> start.plusDays(1);
+            case TIME_1W -> start.plusWeeks(1);
+            case TIME_1MO -> start.plusMonths(1);
+            default -> throw new IllegalArgumentException("Unsupported calendar interval: " + descriptor.kind());
+        };
     }
 
     private boolean isWeekend(LocalDate d) {

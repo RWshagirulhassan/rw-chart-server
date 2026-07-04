@@ -464,10 +464,11 @@ public class UiSessionController {
                 registryType = "drawing";
             } else if (event.type().startsWith("PLOT")) {
                 registryType = "plot";
-            } else if (event.type().startsWith("ALERT")) {
-                registryType = "alert";
             } else if (event.type().startsWith("INTENT")) {
                 registryType = "intent";
+            }
+            if (event.type().startsWith("ALERT")) {
+                continue;
             }
             ScriptDeltaWsEvent wsEvent = new ScriptDeltaWsEvent(
                     target.value(),
@@ -477,11 +478,7 @@ public class UiSessionController {
                     scriptInstanceId,
                     payload,
                     registryType);
-            if ("INTENT_ADD".equals(event.type())) {
-                webSocketBroadcaster.broadcastIntentToSession(target, wsEvent);
-            } else {
-                webSocketBroadcaster.broadcastScriptDeltaToSession(target, wsEvent);
-            }
+            webSocketBroadcaster.broadcastScriptDeltaToSession(target, wsEvent);
         }
     }
 
@@ -556,6 +553,7 @@ public class UiSessionController {
         String encodedSeriesKey = SeriesKeyCodec.encode(key);
         var runtimeOpt = runtimeManager.get(key);
         if (runtimeOpt.isEmpty()) {
+            var entry = coordinator.seriesEntry(key).orElse(null);
             return new DebugSeriesRuntimeView(
                     encodedSeriesKey,
                     false,
@@ -565,6 +563,9 @@ public class UiSessionController {
                     null,
                     null,
                     null,
+                    entry == null ? null : entry.seriesHealthState().snapshot().status().name(),
+                    entry == null ? null : entry.seriesHealthState().snapshot().reason(),
+                    entry == null ? null : entry.seriesHealthState().snapshot().reuseDecision().name(),
                     null,
                     List.of());
         }
@@ -572,6 +573,7 @@ public class UiSessionController {
         var runtime = runtimeOpt.get();
         var health = runtime.health();
         RegistryHub.RegistryDebugState registryHubState = runtime.registryDebugState();
+        var entry = coordinator.seriesEntry(key).orElse(null);
         List<DebugScriptInstanceView> scripts = runtime.listScripts().stream()
                 .map(item -> new DebugScriptInstanceView(
                         item.instanceId().value(),
@@ -595,6 +597,9 @@ public class UiSessionController {
                 health.scriptCount(),
                 health.lastError(),
                 health.formingBarExecutionBlocked(),
+                entry == null ? null : entry.seriesHealthState().snapshot().status().name(),
+                entry == null ? null : entry.seriesHealthState().snapshot().reason(),
+                entry == null ? null : entry.seriesHealthState().snapshot().reuseDecision().name(),
                 registryHubState,
                 scripts);
     }
@@ -649,6 +654,9 @@ public class UiSessionController {
             Integer scriptCount,
             String lastError,
             Boolean formingBarExecutionBlocked,
+            String seriesHealthStatus,
+            String seriesHealthReason,
+            String seriesReuseDecision,
             RegistryHub.RegistryDebugState registryHub,
             List<DebugScriptInstanceView> scripts) {
     }

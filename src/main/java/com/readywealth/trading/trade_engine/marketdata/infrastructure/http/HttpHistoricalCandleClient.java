@@ -2,7 +2,9 @@ package com.readywealth.trading.trade_engine.marketdata.infrastructure.http;
 
 import com.readywealth.trading.trade_engine.engine.domain.series.Candle;
 import com.readywealth.trading.trade_engine.engine.domain.series.CandleCause;
+import com.readywealth.trading.trade_engine.engine.domain.series.IntervalDescriptor;
 import com.readywealth.trading.trade_engine.engine.domain.series.IntervalKind;
+import com.readywealth.trading.trade_engine.engine.domain.series.IntervalDescriptors;
 import com.readywealth.trading.trade_engine.marketdata.application.AuthTokenProvider;
 import com.readywealth.trading.trade_engine.marketdata.application.HistoricalRequestRateLimiter;
 import com.readywealth.trading.trade_engine.marketdata.application.SessionCandleBoundaryService;
@@ -37,7 +39,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Component
@@ -54,15 +58,24 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
     private final SessionCandleBoundaryService boundaryService;
     private final ZoneId exchangeZoneId;
     private final HistoricalRequestRateLimiter historicalRequestRateLimiter;
+    private final BootstrapSchedulerProperties schedulerProperties;
 
     @Autowired
     public HttpHistoricalCandleClient(
             AuthTokenProvider authTokenProvider,
             SessionCandleBoundaryService boundaryService,
             HistoricalRequestRateLimiter historicalRequestRateLimiter,
+            BootstrapSchedulerProperties schedulerProperties,
             @Value("${kite.base-url:https://api.kite.trade}") String kiteBaseUrl,
             @Value("${kite.api-key:}") String kiteApiKey) {
-        this(authTokenProvider, boundaryService, kiteBaseUrl, kiteApiKey, new RestTemplate(), historicalRequestRateLimiter);
+        this(
+                authTokenProvider,
+                boundaryService,
+                kiteBaseUrl,
+                kiteApiKey,
+                new RestTemplate(),
+                historicalRequestRateLimiter,
+                schedulerProperties);
     }
 
     HttpHistoricalCandleClient(
@@ -78,7 +91,8 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
                 kiteBaseUrl,
                 kiteApiKey,
                 new RestTemplate(),
-                new HistoricalRequestRateLimiter(new BootstrapSchedulerProperties()));
+                new HistoricalRequestRateLimiter(new BootstrapSchedulerProperties()),
+                new BootstrapSchedulerProperties());
     }
 
     private HttpHistoricalCandleClient(
@@ -87,7 +101,8 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
             String kiteBaseUrl,
             String kiteApiKey,
             RestTemplate restTemplate,
-            HistoricalRequestRateLimiter historicalRequestRateLimiter) {
+            HistoricalRequestRateLimiter historicalRequestRateLimiter,
+            BootstrapSchedulerProperties schedulerProperties) {
         this.http = restTemplate;
         this.authTokenProvider = authTokenProvider;
         this.boundaryService = boundaryService;
@@ -95,6 +110,26 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
         this.kiteApiKey = kiteApiKey;
         this.exchangeZoneId = boundaryService.exchangeZoneId();
         this.historicalRequestRateLimiter = historicalRequestRateLimiter;
+        this.schedulerProperties = schedulerProperties;
+    }
+
+    HttpHistoricalCandleClient(
+            AuthTokenProvider authTokenProvider,
+            SessionCandleBoundaryService boundaryService,
+            String kiteBaseUrl,
+            String kiteApiKey,
+            RestTemplate restTemplate,
+            HistoricalRequestRateLimiter historicalRequestRateLimiter,
+            BootstrapSchedulerProperties schedulerProperties,
+            boolean unusedTestHook) {
+        this(
+                authTokenProvider,
+                boundaryService,
+                kiteBaseUrl,
+                kiteApiKey,
+                restTemplate,
+                historicalRequestRateLimiter,
+                schedulerProperties);
     }
 
     @Override
@@ -113,8 +148,8 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
             return Collections.emptyList();
         }
 
-        IntervalMapping mapping = mapInterval(intervalKind);
-        if (mapping == null) {
+        IntervalDescriptor descriptor = IntervalDescriptors.of(intervalKind);
+        if (descriptor.isTick()) {
             log.warn("historical fetch unsupported for intervalKind={} instrument={}", intervalKind, instrumentToken);
             return Collections.emptyList();
         }
@@ -135,7 +170,7 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
                 "historical_fetch_start instrument={} interval={} fromUtc={} toUtc={} fromExchange={} toExchange={} zone={}",
                 instrumentToken, intervalKind, from, to, fromZdt, toZdt, exchangeZoneId);
 
-        return fetchHistorical(instrumentToken, intervalKind, accessToken.get(), fromZdt, toZdt);
+        return fetchCandlesInRange(instrumentToken, descriptor, accessToken.get(), fromZdt, toZdt, false);
     }
 
     @Override
@@ -157,8 +192,8 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
             IntervalKind intervalKind,
             ZonedDateTime now,
             boolean bootstrapMode) {
-        IntervalMapping mapping = mapInterval(intervalKind);
-        if (mapping == null) {
+        IntervalDescriptor requestedDescriptor = IntervalDescriptors.of(intervalKind);
+        if (requestedDescriptor.isTick()) {
             log.warn("historical recent unsupported intervalKind={} instrument={}", intervalKind, instrumentToken);
             return Collections.emptyList();
         }
@@ -180,41 +215,60 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
             return Collections.emptyList();
         }
 
-        ZonedDateTime toNow = clampToTradableNow(now.withNano(0), intervalKind, mapping.barDuration());
+        IntervalDescriptor sourceDescriptor = IntervalDescriptors.of(requestedDescriptor.sourceIntervalKindOrSelf());
+        ZonedDateTime toNow = clampToTradableNow(now.withNano(0), sourceDescriptor);
         LocalDate endDate = toNow.toLocalDate();
         LocalDate startDate = subtractBusinessDaysInclusive(endDate, lookback);
-        ZonedDateTime fromDayStart = ZonedDateTime.of(startDate, LocalTime.MIDNIGHT, exchangeZoneId);
-        ZonedDateTime barStart = floorToRecentBarStart(toNow, mapping.barDuration(), intervalKind);
+        ZonedDateTime requestedFromDayStart = ZonedDateTime.of(startDate, LocalTime.MIDNIGHT, exchangeZoneId);
+        ZonedDateTime sourceFetchStart = requestedDescriptor.isDerivedFromSource()
+                ? boundaryService.floorToBucketStart(requestedFromDayStart, requestedDescriptor)
+                : requestedFromDayStart;
+        ZonedDateTime barStart = floorToRecentBarStart(toNow, sourceDescriptor);
 
         log.info(
-                "historical_recent_start instrument={} interval={} lookbackDays={} fromDayStart={} barStart={} toNow={} bootstrapMode={}",
-                instrumentToken, intervalKind, lookback, fromDayStart, barStart, toNow, bootstrapMode);
+                "historical_recent_start instrument={} interval={} sourceInterval={} lookbackDays={} sourceFetchStart={} barStart={} toNow={} bootstrapMode={}",
+                instrumentToken,
+                intervalKind,
+                sourceDescriptor.kind(),
+                lookback,
+                sourceFetchStart,
+                barStart,
+                toNow,
+                bootstrapMode);
 
-        List<Candle> out = new ArrayList<>();
+        List<Candle> sourceCandles = new ArrayList<>();
 
-        if (barStart.isAfter(fromDayStart)) {
-            List<Candle> full = fetchHistorical(
-                    instrumentToken,
-                    intervalKind,
-                    accessToken.get(),
-                    fromDayStart,
-                    barStart,
-                    bootstrapMode);
-            out.addAll(full);
-            log.info("historical_recent_full_count instrument={} interval={} count={}",
-                    instrumentToken, intervalKind, full.size());
+        if (barStart.isAfter(sourceFetchStart)) {
+            List<Candle> full = requestedDescriptor.isDerivedFromSource()
+                    ? fetchHistoricalInChunks(
+                            instrumentToken,
+                            sourceDescriptor.kind(),
+                            accessToken.get(),
+                            sourceFetchStart,
+                            barStart,
+                            bootstrapMode)
+                    : fetchHistorical(
+                            instrumentToken,
+                            sourceDescriptor.kind(),
+                            accessToken.get(),
+                            sourceFetchStart,
+                            barStart,
+                            bootstrapMode);
+            sourceCandles.addAll(full);
+            log.info("historical_recent_full_count instrument={} interval={} sourceInterval={} count={}",
+                    instrumentToken, intervalKind, sourceDescriptor.kind(), full.size());
         }
 
         if (toNow.isAfter(barStart)) {
             List<Candle> partial = fetchHistorical(
                     instrumentToken,
-                    intervalKind,
+                    sourceDescriptor.kind(),
                     accessToken.get(),
                     barStart,
                     toNow,
                     bootstrapMode);
-            log.info("historical_recent_live_count instrument={} interval={} count={}",
-                    instrumentToken, intervalKind, partial.size());
+            log.info("historical_recent_live_count instrument={} interval={} sourceInterval={} count={}",
+                    instrumentToken, intervalKind, sourceDescriptor.kind(), partial.size());
 
             if (!partial.isEmpty()) {
                 long liveStart = barStart.toInstant().toEpochMilli();
@@ -224,7 +278,7 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
                         .orElseGet(() -> partial.get(partial.size() - 1));
                 Candle live = new Candle(
                         instrumentToken,
-                        intervalKind,
+                        sourceDescriptor.kind(),
                         liveStart,
                         toNow.toInstant().toEpochMilli(),
                         seed.open(),
@@ -235,25 +289,30 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
                         0L,
                         1,
                         CandleCause.BACKFILL);
-                out.removeIf(c -> c.startTimeEpochMs() == liveStart);
-                out.add(live);
-                log.info("historical_recent_live_applied instrument={} interval={} liveStart={} liveEnd={}",
-                        instrumentToken, intervalKind, live.startTimeEpochMs(), live.endTimeEpochMs());
+                sourceCandles.removeIf(c -> c.startTimeEpochMs() == liveStart);
+                sourceCandles.add(live);
+                log.info("historical_recent_live_applied instrument={} interval={} sourceInterval={} liveStart={} liveEnd={}",
+                        instrumentToken, intervalKind, sourceDescriptor.kind(), live.startTimeEpochMs(), live.endTimeEpochMs());
             }
         }
 
-        out.sort(Comparator.comparingLong(Candle::startTimeEpochMs));
+        List<Candle> normalizedSource = sortAndDedupeCandles(sourceCandles);
 
-        long fromMs = fromDayStart.toInstant().toEpochMilli();
+        long fromMs = sourceFetchStart.toInstant().toEpochMilli();
         long toMs = toNow.toInstant().toEpochMilli();
-        out.removeIf(c -> {
+        normalizedSource.removeIf(c -> {
             LocalDate startDateLocal = Instant.ofEpochMilli(c.startTimeEpochMs()).atZone(exchangeZoneId).toLocalDate();
             return isWeekend(startDateLocal) || c.startTimeEpochMs() < fromMs || c.startTimeEpochMs() > toMs;
         });
 
+        List<Candle> requestedCandles = requestedDescriptor.isDerivedFromSource()
+                ? aggregateCandles(instrumentToken, requestedDescriptor, normalizedSource)
+                : normalizedSource;
+        requestedCandles = applyRecentCandleLimit(intervalKind, requestedCandles);
+
         log.info("historical_recent_result instrument={} interval={} count={} from={} to={}",
-                instrumentToken, intervalKind, out.size(), fromDayStart, toNow);
-        return out;
+                instrumentToken, intervalKind, requestedCandles.size(), sourceFetchStart, toNow);
+        return requestedCandles;
     }
 
     protected List<Candle> fetchHistorical(
@@ -262,7 +321,11 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
             String accessToken,
             ZonedDateTime from,
             ZonedDateTime to) {
-        return fetchHistorical(instrumentToken, intervalKind, accessToken, from, to, false);
+        IntervalDescriptor descriptor = IntervalDescriptors.of(intervalKind);
+        if (!descriptor.supportsVendorHistorical()) {
+            return Collections.emptyList();
+        }
+        return doHistoricalRequest(instrumentToken, descriptor, accessToken, from, to, false);
     }
 
     private List<Candle> fetchHistorical(
@@ -272,16 +335,18 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
             ZonedDateTime from,
             ZonedDateTime to,
             boolean bootstrapMode) {
-        IntervalMapping mapping = mapInterval(intervalKind);
-        if (mapping == null) {
+        IntervalDescriptor descriptor = IntervalDescriptors.of(intervalKind);
+        if (!descriptor.supportsVendorHistorical()) {
             return Collections.emptyList();
         }
-        return doHistoricalRequest(instrumentToken, intervalKind, mapping, accessToken, from, to, bootstrapMode);
+        if (!bootstrapMode) {
+            return fetchHistorical(instrumentToken, intervalKind, accessToken, from, to);
+        }
+        return doHistoricalRequest(instrumentToken, descriptor, accessToken, from, to, bootstrapMode);
     }
 
     private List<Candle> doHistoricalRequest(long instrumentToken,
-                                             IntervalKind intervalKind,
-                                             IntervalMapping mapping,
+                                             IntervalDescriptor descriptor,
                                              String accessToken,
                                              ZonedDateTime from,
                                              ZonedDateTime to,
@@ -291,7 +356,7 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
 
         URI uri = UriComponentsBuilder
                 .fromUriString(kiteBaseUrl)
-                .pathSegment("instruments", "historical", String.valueOf(instrumentToken), mapping.kiteInterval())
+                .pathSegment("instruments", "historical", String.valueOf(instrumentToken), descriptor.kiteInterval())
                 .queryParam("from", fromStr)
                 .queryParam("to", toStr)
                 .queryParam("continuous", "0")
@@ -300,7 +365,7 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
                 .encode()
                 .toUri();
         log.info("kite_historical_request uri={} instrument={} interval={} from={} to={}",
-                uri, instrumentToken, intervalKind, fromStr, toStr);
+                uri, instrumentToken, descriptor.kind(), fromStr, toStr);
 
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Kite-Version", "3");
@@ -309,37 +374,37 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
 
         KiteHistoricalResponse body;
         try {
-            historicalRequestRateLimiter.acquirePermit();
+            acquireHistoricalPermit();
             ResponseEntity<KiteHistoricalResponse> response = executeHistoricalRequest(request);
             body = response.getBody();
         } catch (RestClientException exception) {
             HistoricalFetchException typed = toHistoricalFetchException(
-                    instrumentToken, intervalKind, uri, exception);
+                    instrumentToken, descriptor.kind(), uri, exception);
             if (bootstrapMode) {
                 throw typed;
             }
             log.warn("kite historical request failed for {}@{} url={} transient={} error={}",
-                    instrumentToken, intervalKind, uri, typed.isTransientFailure(), exception.toString());
+                    instrumentToken, descriptor.kind(), uri, typed.isTransientFailure(), exception.toString());
             return Collections.emptyList();
         }
 
         if (body == null || body.data == null || body.data.candles == null) {
             if (bootstrapMode) {
                 throw new HistoricalFetchException(
-                        "kite_historical_invalid_payload instrument=" + instrumentToken + " interval=" + intervalKind,
+                        "kite_historical_invalid_payload instrument=" + instrumentToken + " interval=" + descriptor.kind(),
                         false);
             }
             log.info("kite_historical_empty instrument={} interval={} from={} to={}",
-                    instrumentToken, intervalKind, fromStr, toStr);
+                    instrumentToken, descriptor.kind(), fromStr, toStr);
             return Collections.emptyList();
         }
         if (body.data.candles.isEmpty()) {
             log.info("kite_historical_empty instrument={} interval={} from={} to={}",
-                    instrumentToken, intervalKind, fromStr, toStr);
+                    instrumentToken, descriptor.kind(), fromStr, toStr);
             return Collections.emptyList();
         }
         log.info("kite_historical_rows instrument={} interval={} rows={}",
-                instrumentToken, intervalKind, body.data.candles.size());
+                instrumentToken, descriptor.kind(), body.data.candles.size());
 
         List<Candle> result = new ArrayList<>(body.data.candles.size());
         for (List<Object> row : body.data.candles) {
@@ -355,11 +420,11 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
                 long volume = toLong(row.get(5));
 
                 Instant start = parseTimestamp(ts);
-                Instant end = start.plus(mapping.barDuration());
+                Instant end = start.plus(descriptor.fixedDurationOrThrow());
 
                 result.add(new Candle(
                         instrumentToken,
-                        intervalKind,
+                        descriptor.kind(),
                         start.toEpochMilli(),
                         end.toEpochMilli(),
                         open,
@@ -374,7 +439,7 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
                 // best-effort: skip malformed rows
             }
         }
-        log.info("kite_historical_parsed instrument={} interval={} accepted={}", instrumentToken, intervalKind,
+        log.info("kite_historical_parsed instrument={} interval={} accepted={}", instrumentToken, descriptor.kind(),
                 result.size());
         return result;
     }
@@ -426,30 +491,122 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
         }
     }
 
-    private IntervalMapping mapInterval(IntervalKind kind) {
-        return switch (kind) {
-            case TIME_1M -> new IntervalMapping("minute", Duration.ofMinutes(1));
-            case TIME_2M -> new IntervalMapping("2minute", Duration.ofMinutes(2));
-            case TIME_3M -> new IntervalMapping("3minute", Duration.ofMinutes(3));
-            case TIME_5M -> new IntervalMapping("5minute", Duration.ofMinutes(5));
-            case TIME_10M -> new IntervalMapping("10minute", Duration.ofMinutes(10));
-            case TIME_15M -> new IntervalMapping("15minute", Duration.ofMinutes(15));
-            case TIME_30M -> new IntervalMapping("30minute", Duration.ofMinutes(30));
-            case TIME_45M -> new IntervalMapping("45minute", Duration.ofMinutes(45));
-            case TIME_1H -> new IntervalMapping("60minute", Duration.ofHours(1));
-            case TIME_1D -> new IntervalMapping("day", Duration.ofDays(1));
-            default -> null;
-        };
+    private List<Candle> fetchCandlesInRange(
+            long instrumentToken,
+            IntervalDescriptor descriptor,
+            String accessToken,
+            ZonedDateTime from,
+            ZonedDateTime to,
+            boolean bootstrapMode) {
+        if (!descriptor.isDerivedFromSource()) {
+            return fetchHistorical(instrumentToken, descriptor.kind(), accessToken, from, to, bootstrapMode);
+        }
+        ZonedDateTime sourceFrom = boundaryService.floorToBucketStart(from, descriptor);
+        List<Candle> sourceCandles = fetchHistoricalInChunks(
+                instrumentToken,
+                descriptor.sourceIntervalKindOrSelf(),
+                accessToken,
+                sourceFrom,
+                to,
+                bootstrapMode);
+        List<Candle> aggregated = aggregateCandles(instrumentToken, descriptor, sourceCandles);
+        long fromMs = from.toInstant().toEpochMilli();
+        long toMs = to.toInstant().toEpochMilli();
+        aggregated.removeIf(candle -> candle.endTimeEpochMs() <= fromMs || candle.startTimeEpochMs() > toMs);
+        return aggregated;
     }
 
     private int lookbackBusinessDays(IntervalKind kind) {
-        return switch (kind) {
-            case TIME_1M, TIME_2M, TIME_3M -> 3;
-            case TIME_5M, TIME_10M, TIME_15M -> 10;
-            case TIME_30M, TIME_45M, TIME_1H -> 60;
-            case TIME_1D -> 600;
-            default -> 0;
-        };
+        return schedulerProperties.lookbackBusinessDays(kind);
+    }
+
+    private List<Candle> applyRecentCandleLimit(IntervalKind kind, List<Candle> candles) {
+        int limit = schedulerProperties.recentCandleLimit(kind);
+        if (limit <= 0 || candles == null || candles.size() <= limit) {
+            return candles;
+        }
+        return new ArrayList<>(candles.subList(candles.size() - limit, candles.size()));
+    }
+
+    private List<Candle> fetchHistoricalInChunks(
+            long instrumentToken,
+            IntervalKind intervalKind,
+            String accessToken,
+            ZonedDateTime from,
+            ZonedDateTime to,
+            boolean bootstrapMode) {
+        if (!to.isAfter(from)) {
+            return Collections.emptyList();
+        }
+        int chunkDays = schedulerProperties.historicalChunkDays();
+        List<Candle> combined = new ArrayList<>();
+        ZonedDateTime cursor = from;
+        while (!cursor.isAfter(to)) {
+            ZonedDateTime chunkEnd = cursor.plusDays(chunkDays);
+            if (chunkEnd.isAfter(to)) {
+                chunkEnd = to;
+            }
+            combined.addAll(fetchHistorical(instrumentToken, intervalKind, accessToken, cursor, chunkEnd, bootstrapMode));
+            if (!chunkEnd.isBefore(to)) {
+                break;
+            }
+            cursor = chunkEnd;
+        }
+        return sortAndDedupeCandles(combined);
+    }
+
+    private List<Candle> sortAndDedupeCandles(List<Candle> candles) {
+        if (candles == null || candles.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Map<Long, Candle> byStart = new LinkedHashMap<>();
+        List<Candle> sorted = new ArrayList<>(candles);
+        sorted.sort(Comparator.comparingLong(Candle::startTimeEpochMs));
+        for (Candle candle : sorted) {
+            byStart.put(candle.startTimeEpochMs(), candle);
+        }
+        return new ArrayList<>(byStart.values());
+    }
+
+    private List<Candle> aggregateCandles(
+            long instrumentToken,
+            IntervalDescriptor targetDescriptor,
+            List<Candle> sourceCandles) {
+        if (sourceCandles == null || sourceCandles.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Map<Long, CandleAccumulator> buckets = new LinkedHashMap<>();
+        for (Candle source : sortAndDedupeCandles(sourceCandles)) {
+            Instant startInstant = Instant.ofEpochMilli(source.startTimeEpochMs());
+            Instant bucketStartInstant = boundaryService.floorToBucketStart(startInstant, targetDescriptor);
+            Instant bucketEndInstant = boundaryService.bucketEnd(bucketStartInstant, targetDescriptor);
+            long bucketStart = bucketStartInstant.toEpochMilli();
+            CandleAccumulator accumulator = buckets.computeIfAbsent(
+                    bucketStart,
+                    ignored -> new CandleAccumulator(
+                            bucketStart,
+                            bucketEndInstant.toEpochMilli(),
+                            source.open(),
+                            source.high(),
+                            source.low(),
+                            source.close(),
+                            source.volume(),
+                            source.tickCount(),
+                            source.barVersion(),
+                            source.cause()));
+            accumulator.accumulate(source);
+        }
+
+        List<Candle> aggregated = new ArrayList<>(buckets.size());
+        for (CandleAccumulator accumulator : buckets.values()) {
+            aggregated.add(accumulator.toCandle(instrumentToken, targetDescriptor.kind()));
+        }
+        aggregated.sort(Comparator.comparingLong(Candle::startTimeEpochMs));
+        return aggregated;
+    }
+
+    protected void acquireHistoricalPermit() {
+        historicalRequestRateLimiter.acquirePermit();
     }
 
     private ZonedDateTime alignToBusinessDay(ZonedDateTime dt) {
@@ -480,12 +637,8 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
         return dayOfWeek == DayOfWeek.SATURDAY || dayOfWeek == DayOfWeek.SUNDAY;
     }
 
-    private ZonedDateTime floorToRecentBarStart(ZonedDateTime zdt, Duration barDuration, IntervalKind intervalKind) {
-        return boundaryService.floorToBucketStart(zdt, barDuration, intervalKind);
-    }
-
-    private boolean isIntradayInterval(IntervalKind intervalKind, Duration barDuration) {
-        return boundaryService.isIntradayInterval(intervalKind, barDuration);
+    private ZonedDateTime floorToRecentBarStart(ZonedDateTime zdt, IntervalDescriptor descriptor) {
+        return boundaryService.floorToBucketStart(zdt, descriptor);
     }
 
     private ZonedDateTime floorToSessionBucket(ZonedDateTime zdt, Duration barDuration, LocalTime sessionOpen) {
@@ -500,8 +653,12 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
         return sessionStart.plus(Duration.ofMillis(bucketMillis * completedBuckets));
     }
 
+    private ZonedDateTime clampToTradableNow(ZonedDateTime now, IntervalDescriptor descriptor) {
+        return boundaryService.clampToTradableNow(now, descriptor);
+    }
+
     private ZonedDateTime clampToTradableNow(ZonedDateTime now, IntervalKind intervalKind, Duration barDuration) {
-        return boundaryService.clampToTradableNow(now, intervalKind, barDuration);
+        return clampToTradableNow(now, IntervalDescriptors.of(intervalKind));
     }
 
     private LocalDate previousBusinessDay(LocalDate date) {
@@ -544,6 +701,67 @@ public class HttpHistoricalCandleClient implements HistoricalCandleClient {
         }
     }
 
-    private record IntervalMapping(String kiteInterval, Duration barDuration) {
+    private static final class CandleAccumulator {
+        private final long startTimeEpochMs;
+        private final long endTimeEpochMs;
+        private final double open;
+        private double high;
+        private double low;
+        private double close;
+        private long volume;
+        private long tickCount;
+        private int barVersion;
+        private CandleCause cause;
+
+        private CandleAccumulator(
+                long startTimeEpochMs,
+                long endTimeEpochMs,
+                double open,
+                double high,
+                double low,
+                double close,
+                long volume,
+                long tickCount,
+                int barVersion,
+                CandleCause cause) {
+            this.startTimeEpochMs = startTimeEpochMs;
+            this.endTimeEpochMs = endTimeEpochMs;
+            this.open = open;
+            this.high = high;
+            this.low = low;
+            this.close = close;
+            this.volume = volume;
+            this.tickCount = tickCount;
+            this.barVersion = barVersion;
+            this.cause = cause;
+        }
+
+        private void accumulate(Candle source) {
+            this.high = Math.max(high, source.high());
+            this.low = Math.min(low, source.low());
+            this.close = source.close();
+            this.volume += source.volume();
+            this.tickCount += source.tickCount();
+            this.barVersion = Math.max(barVersion, source.barVersion());
+            if (source.cause() != null) {
+                this.cause = source.cause();
+            }
+        }
+
+        private Candle toCandle(long instrumentToken, IntervalKind intervalKind) {
+            return new Candle(
+                    instrumentToken,
+                    intervalKind,
+                    startTimeEpochMs,
+                    endTimeEpochMs,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                    tickCount,
+                    barVersion,
+                    cause);
+        }
     }
 }

@@ -25,10 +25,8 @@ Rules:
 
 ## Structure Inventory (Current)
 Business contexts:
-- `alerts`: `application`, `domain`, `infrastructure`
 - `auth`: `api/http`, `application`, `domain`, `infrastructure`
 - `engine`: `api/http`, `application/runtime`, `domain`, `infrastructure`
-- `execution`: `api/http`, `api/ws`, `application`, `application/port`, `domain`, `infrastructure`
 - `marketdata`: `api/http`, `api/ws`, `application`, `application/port`, `domain`, `infrastructure`
 - `session`: `api/http`, `application`, `application/port`, `domain`, `infrastructure`
 - `strategy`: `application`, `application/port`, `domain`, `infrastructure`

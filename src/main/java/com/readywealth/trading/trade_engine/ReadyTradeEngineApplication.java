@@ -8,7 +8,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import com.readywealth.trading.trade_engine.auth.infrastructure.config.InternalApiProperties;
 import com.readywealth.trading.trade_engine.auth.infrastructure.config.KiteProperties;
 import com.readywealth.trading.trade_engine.auth.infrastructure.config.TokenExpiryProperties;
-import com.readywealth.trading.trade_engine.execution.infrastructure.config.TradingProperties;
 import com.readywealth.trading.trade_engine.marketdata.infrastructure.config.BootstrapProperties;
 import com.readywealth.trading.trade_engine.marketdata.infrastructure.config.BootstrapSchedulerProperties;
 import com.readywealth.trading.trade_engine.marketdata.infrastructure.config.BootstrapV2Properties;
@@ -27,7 +26,6 @@ import com.readywealth.trading.trade_engine.session.infrastructure.config.Stress
 	BootstrapProperties.class,
 	BootstrapSchedulerProperties.class,
 	BootstrapV2Properties.class,
-	TradingProperties.class,
 	StressSessionProperties.class
 })
 public class ReadyTradeEngineApplication {
